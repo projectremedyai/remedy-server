@@ -5436,6 +5436,123 @@ def _find_full_page_artifact_image_xobjects(
     return found
 
 
+def _read_page_content_stream_bytes(page) -> bytes | None:
+    """Return the concatenated raw bytes of the page's /Contents."""
+    try:
+        c = page.get("/Contents")
+        if isinstance(c, pikepdf.Array):
+            chunks = []
+            for ref in c:
+                obj = ref.get_object() if hasattr(ref, "get_object") else ref
+                chunks.append(obj.read_bytes() if hasattr(obj, "read_bytes") else bytes(obj))
+            return b"\n".join(chunks)
+        obj = c.get_object() if hasattr(c, "get_object") else c
+        return obj.read_bytes() if hasattr(obj, "read_bytes") else bytes(obj)
+    except Exception:
+        return None
+
+
+def _rewrite_artifact_scope_to_figure(page, image_xobject_name: str) -> int | None:
+    """Rewrite ``/Artifact BMC ... Do /<image_xobject_name> ... EMC`` to
+    ``/Figure <</MCID N>> BDC ... EMC`` where N is a fresh MCID for the page.
+
+    Returns the new MCID on success, or None if no matching scope was found
+    or the rewrite failed.
+    """
+    raw = _read_page_content_stream_bytes(page)
+    if raw is None:
+        return None
+    # Find max existing MCID on the page so we can allocate a fresh one.
+    mcids = [int(m) for m in re.findall(rb"/MCID\s+(\d+)", raw)]
+    new_mcid = (max(mcids) if mcids else -1) + 1
+
+    # Match `/Artifact BMC ... Do /<name> ... EMC` (allow optional inline
+    # property dict between /Artifact and BMC). Replace the first match only.
+    target_name_bytes = image_xobject_name.lstrip("/").encode("latin-1")
+    pattern = re.compile(
+        rb"/Artifact\s*(?:<<[^>]*>>)?\s*BMC\s*([^E]*?/"
+        + re.escape(target_name_bytes)
+        + rb"\s+Do[^E]*?)EMC",
+        re.DOTALL,
+    )
+    new_raw, count = pattern.subn(
+        f"/Figure <</MCID {new_mcid}>> BDC \\g<1>EMC".encode("latin-1"),
+        raw,
+        count=1,
+    )
+    if count == 0:
+        return None
+    try:
+        new_stream = page.obj.owner.make_stream(new_raw)
+        page.Contents = new_stream
+    except Exception:
+        return None
+    return new_mcid
+
+
+def _add_mcid_to_parent_tree(
+    pdf: pikepdf.Pdf, page, mcid: int, figure_indirect,
+) -> bool:
+    """Insert ``ParentTree[page.StructParents][mcid] = figure_indirect``.
+
+    PDF/UA tools resolve marked-content MCIDs back to their owning struct
+    element via the page's /StructParents index into /StructTreeRoot/ParentTree.
+    Returns True on success.
+    """
+    struct_root = pdf.Root.get("/StructTreeRoot")
+    if struct_root is None:
+        return False
+    parent_tree = struct_root.get("/ParentTree")
+    if parent_tree is None:
+        return False
+    sp = page.get("/StructParents")
+    if sp is None:
+        return False
+    try:
+        sp_idx = int(sp)
+    except Exception:
+        return False
+
+    def find_leaf(node, target):
+        nums = node.get("/Nums")
+        if nums is not None:
+            for i in range(0, len(nums), 2):
+                try:
+                    if int(nums[i]) == target:
+                        return nums, i + 1
+                except Exception:
+                    continue
+            return None
+        kids = node.get("/Kids")
+        if kids is None:
+            return None
+        for kid in kids:
+            kid_obj = kid.get_object() if hasattr(kid, "get_object") else kid
+            limits = kid_obj.get("/Limits")
+            if limits is None:
+                continue
+            try:
+                lo, hi = int(limits[0]), int(limits[1])
+            except Exception:
+                continue
+            if lo <= target <= hi:
+                return find_leaf(kid_obj, target)
+        return None
+
+    found = find_leaf(parent_tree, sp_idx)
+    if found is None:
+        return False
+    nums_arr, val_idx = found
+    arr = nums_arr[val_idx]
+    if not isinstance(arr, pikepdf.Array):
+        return False
+    null_ref = pikepdf.Object.parse(b"null")
+    while len(arr) <= mcid:
+        arr.append(null_ref)
+    arr[mcid] = figure_indirect
+    return True
+
+
 def fix_substantive_artifact_images(
     pdf: pikepdf.Pdf, *, vision_provider=None
 ) -> list[str]:
@@ -5524,26 +5641,30 @@ def fix_substantive_artifact_images(
                 text_only += 1
                 continue
             page = pdf.pages[page_idx]
-            # /OBJR linking the figure to the image XObject gives the new
-            # /Figure proper content association (PDF/UA-1 alt-associated)
-            # without an MCID — the existing /Artifact scope keeps its own
-            # marked-content role for the page-image layer.
-            objr = pikepdf.Dictionary({
-                "/Type": pikepdf.Name("/OBJR"),
-                "/Pg": page.obj,
-                "/Obj": xo,
-            })
+            # Rewrite the page content stream: /Artifact BMC ... Do EMC →
+            # /Figure <</MCID N>> BDC ... Do EMC, allocating a fresh MCID.
+            # Adobe Acrobat binds hover-text and read-out-loud to the
+            # marked-content region rather than to /OBJR object references,
+            # so MCID-linkage is required for the alt-text to actually
+            # surface in assistive-tech UI.
+            new_mcid = _rewrite_artifact_scope_to_figure(page, xname)
+            if new_mcid is None:
+                continue
             figure = pikepdf.Dictionary({
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/Figure"),
                 "/Pg": page.obj,
                 "/Alt": pikepdf.String(text[:300]),
                 "/P": struct_root,
-                "/K": pikepdf.Array([objr]),
+                "/K": pikepdf.Array([pikepdf.Object.parse(str(new_mcid).encode())]),
             })
             new_kid = pdf.make_indirect(figure)
             root_kids = [new_kid] + root_kids
             struct_root["/K"] = pikepdf.Array(root_kids)
+            # Extend ParentTree[StructParents][new_mcid] = figure so AT
+            # tools can resolve the MCID back to the /Figure struct elem.
+            if not _add_mcid_to_parent_tree(pdf, page, new_mcid, new_kid):
+                continue
             promoted += 1
 
     parts = []
