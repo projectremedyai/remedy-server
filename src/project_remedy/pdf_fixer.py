@@ -5371,6 +5371,179 @@ def fix_image_struct_elems_retag(pdf: pikepdf.Pdf) -> list[str]:
     return []
 
 
+def _find_full_page_artifact_image_xobjects(
+    page,
+) -> list[tuple[str, pikepdf.Object]]:
+    """Return ``[(xobject_name, xobject_dict), ...]`` for each Image XObject
+    rendered inside a ``/Artifact BMC ... EMC`` scope on the page whose raster
+    aspect ratio is within 15% of the page aspect ratio.
+
+    The aspect-ratio heuristic targets full-page scan images that producers
+    sometimes tag as artifacts to hide a low-quality OCR layer underneath.
+    When the scan contains a substantive figure (a photograph, silkscreen,
+    illustration) the figure's accessibility information is lost — Adobe
+    Acrobat won't flag it because artifacts are intentionally undescribed,
+    but screen readers also won't announce anything.
+    """
+    try:
+        content = page.get("/Contents")
+        if isinstance(content, pikepdf.Array):
+            chunks = []
+            for ref in content:
+                obj = ref.get_object() if hasattr(ref, "get_object") else ref
+                chunks.append(obj.read_bytes() if hasattr(obj, "read_bytes") else bytes(obj))
+            raw = b"\n".join(chunks)
+        else:
+            obj = content.get_object() if hasattr(content, "get_object") else content
+            raw = obj.read_bytes() if hasattr(obj, "read_bytes") else bytes(obj)
+    except Exception:
+        return []
+
+    artifact_block = re.compile(
+        rb"/Artifact\s*(?:<<[^>]*>>)?\s*BMC\s*([^E]*?Do\s*[^E]*?)EMC",
+        re.DOTALL,
+    )
+    do_in_block = re.compile(rb"/([A-Za-z][\w]*)\s+Do\b")
+    try:
+        page_w = float(page.mediabox[2]) - float(page.mediabox[0])
+        page_h = float(page.mediabox[3]) - float(page.mediabox[1])
+    except Exception:
+        return []
+    if not page_w or not page_h:
+        return []
+    aspect_page = page_w / page_h
+
+    found: list[tuple[str, pikepdf.Object]] = []
+    for m in artifact_block.finditer(raw):
+        for d in do_in_block.finditer(m.group(1)):
+            xname = d.group(1).decode("latin-1")
+            try:
+                xo = page.Resources.XObject.get(pikepdf.Name("/" + xname))
+            except Exception:
+                continue
+            if xo is None or xo.get("/Subtype") != pikepdf.Name("/Image"):
+                continue
+            try:
+                w = int(xo.get("/Width", 0))
+                h = int(xo.get("/Height", 0))
+            except Exception:
+                continue
+            if not h:
+                continue
+            aspect_img = w / h
+            if abs(aspect_img - aspect_page) / aspect_page < 0.15:
+                found.append((xname, xo))
+    return found
+
+
+def fix_substantive_artifact_images(
+    pdf: pikepdf.Pdf, *, vision_provider=None
+) -> list[str]:
+    """Promote /Artifact-wrapped full-page images to /Figure when the image
+    actually carries substantive visual content (a photograph, painting,
+    silkscreen, illustration, etc. that the producer mis-tagged as
+    decorative).
+
+    Without a vision provider, this is a no-op: we have no way to tell a
+    full-page scan-of-text-only from a full-page scan-of-an-artwork without
+    looking at the pixels. With a vision provider, we render each candidate,
+    ask the model to identify the visually-prominent element, and add a
+    /Figure struct element with the description as /Alt. The model is
+    instructed to return ``TEXT_ONLY_PAGE`` for pure typeset scans, which we
+    treat as a signal to leave the artifact tag in place.
+
+    Adds the new /Figure at the root of the structure tree with ``/Pg``
+    pointing to the page; this gives the screen reader a hook even though
+    there's no MCID linkage to a specific marked-content scope.
+    """
+    if vision_provider is None:
+        return []
+
+    struct_root = pdf.Root.get("/StructTreeRoot")
+    if struct_root is None:
+        return []
+
+    # Pages that already have a /Figure don't need promotion.
+    page_has_figure: dict[int, bool] = {}
+    for node, _depth, _parent in walk_structure_tree(pdf):
+        if _get_struct_type(node) != "Figure":
+            continue
+        idx = _find_node_page(node, pdf)
+        if idx is not None and idx >= 0:
+            page_has_figure[idx] = True
+
+    candidates: list[tuple[int, str, pikepdf.Object]] = []
+    for page_idx, page in enumerate(pdf.pages):
+        if page_has_figure.get(page_idx):
+            continue
+        for xname, xo in _find_full_page_artifact_image_xobjects(page):
+            candidates.append((page_idx, xname, xo))
+
+    if not candidates:
+        return []
+
+    # Render each candidate to a temp PNG, ask vision for a description.
+    from project_remedy.pdf_vision import VisionAnalyzer
+
+    prompt = (
+        "Describe the most visually prominent figure or artwork in this image. "
+        "If the image contains a photograph, painting, silkscreen, poster, or illustration "
+        "alongside body text, describe THE ARTWORK (subject, style, composition). "
+        "If the page is purely typeset text with no figures, respond with 'TEXT_ONLY_PAGE'. "
+        "2-3 sentences."
+    )
+
+    promoted = 0
+    text_only = 0
+    root_k = struct_root.get("/K")
+    root_kids = list(root_k) if isinstance(root_k, pikepdf.Array) else (
+        [root_k] if root_k else []
+    )
+
+    with TemporaryDirectory(prefix="remedy-artifact-promote-") as temp_dir:
+        temp_path = Path(temp_dir)
+        for page_idx, xname, xo in candidates:
+            tmp = temp_path / f"p{page_idx}-{xname}"
+            try:
+                pikepdf.PdfImage(xo).extract_to(fileprefix=str(tmp))
+            except Exception:
+                continue
+            extracted = next(temp_path.glob(f"p{page_idx}-{xname}.*"), None)
+            if extracted is None:
+                continue
+            try:
+                desc = _run_async_callable_blocking(
+                    vision_provider.analyze_image, extracted, prompt,
+                )
+            except Exception:
+                continue
+            if not desc:
+                continue
+            text = str(desc).strip().strip('"').strip("'").strip()
+            if not text or text.upper().startswith("TEXT_ONLY_PAGE"):
+                text_only += 1
+                continue
+            page = pdf.pages[page_idx]
+            figure = pikepdf.Dictionary({
+                "/Type": pikepdf.Name("/StructElem"),
+                "/S": pikepdf.Name("/Figure"),
+                "/Pg": page.obj,
+                "/Alt": pikepdf.String(text[:300]),
+                "/P": struct_root,
+            })
+            new_kid = pdf.make_indirect(figure)
+            root_kids = [new_kid] + root_kids
+            struct_root["/K"] = pikepdf.Array(root_kids)
+            promoted += 1
+
+    parts = []
+    if promoted:
+        parts.append(f"Promoted {promoted} /Artifact-wrapped image(s) to /Figure with vision alt-text")
+    if text_only:
+        parts.append(f"Skipped {text_only} /Artifact image(s) confirmed as pure-text scans")
+    return parts
+
+
 def fix_xobject_bearing_text_elements(pdf: pikepdf.Pdf) -> list[str]:
     """Add /Alt to text-typed structure nodes that own image content.
 
@@ -15781,6 +15954,7 @@ _VISION_FIX_IDS = {
     "doc-not-image-only", "heading-synthesis", "page-char-encoding",
     "page-multimedia-tagged", "page-no-repetitive-links", "tables-regularity",
     "tables-summary", "alt-figures-quality", "headings-hierarchy-quality",
+    "alt-artifact-promote",
 }
 
 _LARGE_DOC_DEFER_FIX_IDS = {
@@ -15870,6 +16044,7 @@ ALL_FIXES: list[tuple[str, callable, str]] = [
     ("lists-li-parent", fix_list_structure, "List structure (LI/Lbl/LBody)"),
     ("toc-structure", fix_toc_structure, "TOC structure (TOC/TOCI/Caption)"),
     ("alt-image-struct-retag", fix_image_struct_elems_retag, "Image-only struct elements use /Figure role"),
+    ("alt-artifact-promote", fix_substantive_artifact_images, "Promote /Artifact-wrapped substantive images to /Figure"),
     ("alt-figures", fix_figures_alt_text, "Figures require alternate text"),
     ("alt-figures-quality", fix_figures_alt_text_quality, "Figure alt text accurately describes visual content"),
     ("alt-formulas", fix_formula_text_equivalents, "Formula elements require text equivalents"),
