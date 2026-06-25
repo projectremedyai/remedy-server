@@ -1402,16 +1402,22 @@ class SimpleFontReplacer:
         # preparer's subset prefix drives the new /FontName.
         old_descriptor = font_obj.get("/FontDescriptor") or pikepdf.Dictionary()
 
-        # Emit the font program stream with the right key/subtype.
+        # Emit the font program stream with the right key/subtype, and pick
+        # the emitted /Font /Subtype from prepared_kind (not source_subtype).
+        # The Type1 fallback in _try_prepare_font may return prepared_kind ==
+        # "truetype" for a /Type1 source; emitting that as a /Type1 font dict
+        # with /FontFile2 is an invalid PDF/UA-1 font (veraPDF rejects it).
         if prepared_kind == "type1c":
             fontfile3_stream = pdf.make_stream(prepared.font_bytes)
             fontfile3_stream["/Subtype"] = Name("/Type1C")
             fontfile3_stream["/Length1"] = len(prepared.font_bytes)
             font_program_kwargs = {"FontFile3": fontfile3_stream}
+            emitted_subtype = "/Type1"
         else:  # truetype
             fontfile2_stream = pdf.make_stream(prepared.font_bytes)
             fontfile2_stream["/Length1"] = len(prepared.font_bytes)
             font_program_kwargs = {"FontFile2": fontfile2_stream}
+            emitted_subtype = "/TrueType"
 
         new_descriptor = pikepdf.Dictionary(
             Type=Name("/FontDescriptor"),
@@ -1428,7 +1434,7 @@ class SimpleFontReplacer:
 
         new_font_dict = pikepdf.Dictionary(
             Type=Name("/Font"),
-            Subtype=Name(source_subtype),
+            Subtype=Name(emitted_subtype),
             BaseFont=Name(f"/{prepared.postscript_name}"),
             Encoding=new_encoding,
             FirstChar=int(prepared.first_char),

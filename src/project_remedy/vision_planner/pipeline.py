@@ -205,10 +205,20 @@ async def run_vision_plan(
             apply_deterministic_fixes,
         )
 
+        # Working file: never mutate the caller's input. When deterministic
+        # fixes apply, we copy to a temp file and continue downstream stages
+        # against that copy so pdf_path stays byte-identical to the input.
+        working_path = pdf_path
+        deterministic_only_pass = False
+
         det_violations, ai_violations = route_violations(normalized_violations)
         if det_violations:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_det:
+                working_path = Path(tmp_det.name)
+            shutil.copy2(str(pdf_path), str(working_path))
+
             det_changes, det_fixed = apply_deterministic_fixes(
-                pdf_path, det_violations
+                working_path, det_violations
             )
             trace["deterministic_fixes"] = det_changes
             trace["deterministic_violations_routed"] = len(det_violations)
@@ -218,8 +228,8 @@ async def run_vision_plan(
                 det_fixed,
             )
 
-            # Re-check violations after deterministic fixes
-            verapdf_post_det = validate_with_verapdf(pdf_path, config=config)
+            # Re-check violations after deterministic fixes on the working copy
+            verapdf_post_det = validate_with_verapdf(working_path, config=config)
             post_det_violations = verapdf_post_det.violations if verapdf_post_det.checked else []
             trace["violations_after_deterministic"] = len(post_det_violations)
 
@@ -237,185 +247,199 @@ async def run_vision_plan(
                 trace["passed"] = True
                 trace["violations_after"] = 0
                 trace["failure_reasons"] = []
+                deterministic_only_pass = True
                 logger.info("All violations fixed by deterministic router — skipping AI planner")
-                return trace
         else:
             trace["deterministic_fixes"] = []
             trace["deterministic_violations_routed"] = 0
 
-        # 2. Build anchor graph
-        anchor_graph = build_anchor_graph(pdf_path)
+        if deterministic_only_pass:
+            # All violations resolved by the deterministic router. Seed
+            # tmp_output from the working copy so the common post-repair /
+            # verify / persistence tail runs and emits the same audit-trail
+            # fields (elapsed_seconds, experiment record, pdf_output_path,
+            # trace JSON) as the AI path.
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp_output = Path(tmp.name)
+            shutil.copy2(str(working_path), str(tmp_output))
+            trace["exec_applied"] = []
+            trace["exec_skipped"] = []
+            trace["exec_errors"] = []
+            trace["greedy"] = False
+        else:
+            # 2. Build anchor graph
+            anchor_graph = build_anchor_graph(working_path)
 
-        # 3-6. Run grounder + planner (errors here should not prevent post-repair)
-        plan = {"confidence": 0, "operations": [], "manual_review": []}
-        semantic_map: dict = {"pages": []}  # default; overwritten on grounder success
-        try:
-            grounder_result = await run_grounder(pdf_path, harness, client, model)
-            trace["grounder_prompt"] = grounder_result["grounder_prompts"]
-            trace["grounder_response"] = grounder_result["grounder_responses"]
+            # 3-6. Run grounder + planner (errors here should not prevent post-repair)
+            plan = {"confidence": 0, "operations": [], "manual_review": []}
+            semantic_map: dict = {"pages": []}  # default; overwritten on grounder success
+            try:
+                grounder_result = await run_grounder(working_path, harness, client, model)
+                trace["grounder_prompt"] = grounder_result["grounder_prompts"]
+                trace["grounder_response"] = grounder_result["grounder_responses"]
 
-            semantic_map = {"pages": grounder_result["pages"]}
-            filtered_violations = harness.filter_violations(normalized_violations)
+                semantic_map = {"pages": grounder_result["pages"]}
+                filtered_violations = harness.filter_violations(normalized_violations)
 
-            # Pass page images to planner so it can see what it's planning for
-            page_images = grounder_result.get("page_images")
+                # Pass page images to planner so it can see what it's planning for
+                page_images = grounder_result.get("page_images")
 
-            planner_result = await run_planner(
-                semantic_map, filtered_violations, anchor_graph, harness, client, model,
-                page_images=page_images,
-            )
-            plan = planner_result["plan"]
-            trace["plan"] = plan
-            trace["planner_prompt"] = planner_result["planner_prompt"]
-            trace["planner_response"] = planner_result["planner_response"]
-
-            confidence = plan.get("confidence", 0)
-            threshold = harness.confidence_threshold()
-            if confidence < threshold:
-                for op in plan.get("operations", []):
-                    op["action"] = "mark_manual_review"
-                    op["reason"] = f"confidence {confidence:.2f} < threshold {threshold:.2f}: {op.get('reason', '')}"
-                trace["failure_reasons"].append(
-                    f"confidence {confidence:.2f} below threshold {threshold:.2f}"
+                planner_result = await run_planner(
+                    semantic_map, filtered_violations, anchor_graph, harness, client, model,
+                    page_images=page_images,
                 )
-        except Exception as e:
-            logger.warning("Grounder/planner failed: %s — proceeding with empty plan + post-repair", e)
-            trace["failure_reasons"].append(f"grounder/planner error: {e}")
+                plan = planner_result["plan"]
+                trace["plan"] = plan
+                trace["planner_prompt"] = planner_result["planner_prompt"]
+                trace["planner_response"] = planner_result["planner_response"]
 
-        # 7. Execute plan (targeted operations)
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp_output = Path(tmp.name)
+                confidence = plan.get("confidence", 0)
+                threshold = harness.confidence_threshold()
+                if confidence < threshold:
+                    for op in plan.get("operations", []):
+                        op["action"] = "mark_manual_review"
+                        op["reason"] = f"confidence {confidence:.2f} < threshold {threshold:.2f}: {op.get('reason', '')}"
+                    trace["failure_reasons"].append(
+                        f"confidence {confidence:.2f} below threshold {threshold:.2f}"
+                    )
+            except Exception as e:
+                logger.warning("Grounder/planner failed: %s — proceeding with empty plan + post-repair", e)
+                trace["failure_reasons"].append(f"grounder/planner error: {e}")
 
-        if greedy_validate and plan.get("operations"):
-            # --- Greedy validated execution: one op at a time ---
-            logger.info(
-                "greedy execute: %d operations for %s",
-                len(plan.get("operations", [])), pdf_path.name,
-            )
-            # Copy source to tmp_output so greedy executor modifies in-place
-            shutil.copy2(str(pdf_path), str(tmp_output))
+            # 7. Execute plan (targeted operations)
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp_output = Path(tmp.name)
 
-            greedy_result = await _greedy_execute(
-                tmp_output, plan, anchor_graph, config,
-                original_path=pdf_path,
-            )
-
-            trace["exec_applied"] = greedy_result.get("applied", [])
-            trace["exec_skipped"] = greedy_result.get("skipped", [])
-            trace["exec_errors"] = greedy_result.get("errors", [])
-            trace["greedy"] = True
-
-            # --- Replan passes: if ops were rejected and violations remain ---
-            rejected_ops = greedy_result.get("skipped", [])
-            remaining_violations = greedy_result.get("final_violations", 0)
-            replan_traces: list[dict] = []
-
-            for pass_num in range(replan_passes):
-                if remaining_violations == 0:
-                    logger.info("greedy replan: 0 violations remain, skipping replan pass %d", pass_num + 1)
-                    break
-                if not rejected_ops:
-                    logger.info("greedy replan: no rejected ops, skipping replan pass %d", pass_num + 1)
-                    break
-
+            if greedy_validate and plan.get("operations"):
+                # --- Greedy validated execution: one op at a time ---
                 logger.info(
-                    "greedy replan pass %d/%d: %d violations remain, %d ops were rejected",
-                    pass_num + 1, replan_passes, remaining_violations, len(rejected_ops),
+                    "greedy execute: %d operations for %s",
+                    len(plan.get("operations", [])), pdf_path.name,
+                )
+                # Copy source to tmp_output so greedy executor modifies in-place
+                shutil.copy2(str(working_path), str(tmp_output))
+
+                greedy_result = await _greedy_execute(
+                    tmp_output, plan, anchor_graph, config,
+                    original_path=working_path,
                 )
 
-                # Get fresh violations from the current tmp_output
-                replan_verapdf = validate_with_verapdf(tmp_output, config=config)
-                replan_violations_list = replan_verapdf.violations if replan_verapdf.checked else []
-                replan_normalized: list[dict] = []
-                for v in replan_violations_list:
-                    replan_normalized.append({
-                        "rule_id": v.get("id", v.get("rule_id", "")),
-                        "description": v.get("description", v.get("help", "")),
-                        "page": v.get("page", 0),
-                        "location": v.get("location", ""),
-                    })
+                trace["exec_applied"] = greedy_result.get("applied", [])
+                trace["exec_skipped"] = greedy_result.get("skipped", [])
+                trace["exec_errors"] = greedy_result.get("errors", [])
+                trace["greedy"] = True
 
-                # Build rejection context for the planner
-                rejection_context = []
-                for rej in rejected_ops:
-                    rej_op = rej.get("op", {})
-                    rejection_context.append(
-                        f"- {rej_op.get('action', '?')} on {rej_op.get('target_anchors', '?')}: "
-                        f"{rej.get('reason', 'unknown')}"
-                    )
-                rejection_summary = "\n".join(rejection_context)
+                # --- Replan passes: if ops were rejected and violations remain ---
+                rejected_ops = greedy_result.get("skipped", [])
+                remaining_violations = greedy_result.get("final_violations", 0)
+                replan_traces: list[dict] = []
 
-                # Re-run planner with remaining violations + rejection context
-                try:
-                    replan_filtered = harness.filter_violations(replan_normalized)
-                    # Inject rejection context into violations so planner sees it
-                    augmented_violations = list(replan_filtered) + [{
-                        "rule_id": "replan-context",
-                        "description": (
-                            "These operations were tried and rejected "
-                            "(they increased violations or failed):\n"
-                            + rejection_summary
-                            + "\nTry different approaches."
-                        ),
-                        "page": 0,
-                        "location": "",
-                    }]
-
-                    replan_result = await run_planner(
-                        semantic_map, augmented_violations, anchor_graph,
-                        harness, client, model,
-                    )
-                    replan_plan = replan_result["plan"]
-
-                    if not replan_plan.get("operations"):
-                        logger.info("greedy replan pass %d: planner returned no operations", pass_num + 1)
+                for pass_num in range(replan_passes):
+                    if remaining_violations == 0:
+                        logger.info("greedy replan: 0 violations remain, skipping replan pass %d", pass_num + 1)
+                        break
+                    if not rejected_ops:
+                        logger.info("greedy replan: no rejected ops, skipping replan pass %d", pass_num + 1)
                         break
 
                     logger.info(
-                        "greedy replan pass %d: planner proposed %d new operations",
-                        pass_num + 1, len(replan_plan.get("operations", [])),
+                        "greedy replan pass %d/%d: %d violations remain, %d ops were rejected",
+                        pass_num + 1, replan_passes, remaining_violations, len(rejected_ops),
                     )
 
-                    replan_greedy = await _greedy_execute(
-                        tmp_output, replan_plan, anchor_graph, config,
-                        original_path=pdf_path,
-                    )
+                    # Get fresh violations from the current tmp_output
+                    replan_verapdf = validate_with_verapdf(tmp_output, config=config)
+                    replan_violations_list = replan_verapdf.violations if replan_verapdf.checked else []
+                    replan_normalized: list[dict] = []
+                    for v in replan_violations_list:
+                        replan_normalized.append({
+                            "rule_id": v.get("id", v.get("rule_id", "")),
+                            "description": v.get("description", v.get("help", "")),
+                            "page": v.get("page", 0),
+                            "location": v.get("location", ""),
+                        })
 
-                    replan_trace = {
-                        "pass": pass_num + 1,
-                        "applied": replan_greedy.get("applied", []),
-                        "skipped": replan_greedy.get("skipped", []),
-                        "final_violations": replan_greedy.get("final_violations", 0),
-                    }
-                    replan_traces.append(replan_trace)
+                    # Build rejection context for the planner
+                    rejection_context = []
+                    for rej in rejected_ops:
+                        rej_op = rej.get("op", {})
+                        rejection_context.append(
+                            f"- {rej_op.get('action', '?')} on {rej_op.get('target_anchors', '?')}: "
+                            f"{rej.get('reason', 'unknown')}"
+                        )
+                    rejection_summary = "\n".join(rejection_context)
 
-                    # Update for next iteration
-                    trace["exec_applied"].extend(replan_greedy.get("applied", []))
-                    trace["exec_skipped"].extend(replan_greedy.get("skipped", []))
-                    rejected_ops = replan_greedy.get("skipped", [])
-                    remaining_violations = replan_greedy.get("final_violations", 0)
+                    # Re-run planner with remaining violations + rejection context
+                    try:
+                        replan_filtered = harness.filter_violations(replan_normalized)
+                        # Inject rejection context into violations so planner sees it
+                        augmented_violations = list(replan_filtered) + [{
+                            "rule_id": "replan-context",
+                            "description": (
+                                "These operations were tried and rejected "
+                                "(they increased violations or failed):\n"
+                                + rejection_summary
+                                + "\nTry different approaches."
+                            ),
+                            "page": 0,
+                            "location": "",
+                        }]
 
-                except Exception as e:
-                    logger.warning("greedy replan pass %d failed: %s", pass_num + 1, e)
-                    replan_traces.append({"pass": pass_num + 1, "error": str(e)})
-                    break
+                        replan_result = await run_planner(
+                            semantic_map, augmented_violations, anchor_graph,
+                            harness, client, model,
+                        )
+                        replan_plan = replan_result["plan"]
 
-            if replan_traces:
-                trace["replan_passes"] = replan_traces
+                        if not replan_plan.get("operations"):
+                            logger.info("greedy replan pass %d: planner returned no operations", pass_num + 1)
+                            break
 
-        else:
-            # --- Legacy bulk execution ---
-            exec_result = execute_plan(pdf_path, tmp_output, plan, anchor_graph)
+                        logger.info(
+                            "greedy replan pass %d: planner proposed %d new operations",
+                            pass_num + 1, len(replan_plan.get("operations", [])),
+                        )
 
-            if isinstance(exec_result, dict):
-                trace["exec_applied"] = exec_result.get("applied", [])
-                trace["exec_skipped"] = exec_result.get("skipped", [])
-                trace["exec_errors"] = exec_result.get("errors", [])
+                        replan_greedy = await _greedy_execute(
+                            tmp_output, replan_plan, anchor_graph, config,
+                            original_path=working_path,
+                        )
+
+                        replan_trace = {
+                            "pass": pass_num + 1,
+                            "applied": replan_greedy.get("applied", []),
+                            "skipped": replan_greedy.get("skipped", []),
+                            "final_violations": replan_greedy.get("final_violations", 0),
+                        }
+                        replan_traces.append(replan_trace)
+
+                        # Update for next iteration
+                        trace["exec_applied"].extend(replan_greedy.get("applied", []))
+                        trace["exec_skipped"].extend(replan_greedy.get("skipped", []))
+                        rejected_ops = replan_greedy.get("skipped", [])
+                        remaining_violations = replan_greedy.get("final_violations", 0)
+
+                    except Exception as e:
+                        logger.warning("greedy replan pass %d failed: %s", pass_num + 1, e)
+                        replan_traces.append({"pass": pass_num + 1, "error": str(e)})
+                        break
+
+                if replan_traces:
+                    trace["replan_passes"] = replan_traces
+
             else:
-                trace["exec_applied"] = getattr(exec_result, "applied", [])
-                trace["exec_skipped"] = getattr(exec_result, "skipped", [])
-                trace["exec_errors"] = getattr(exec_result, "errors", [])
-            trace["greedy"] = False
+                # --- Legacy bulk execution ---
+                exec_result = execute_plan(working_path, tmp_output, plan, anchor_graph)
+
+                if isinstance(exec_result, dict):
+                    trace["exec_applied"] = exec_result.get("applied", [])
+                    trace["exec_skipped"] = exec_result.get("skipped", [])
+                    trace["exec_errors"] = exec_result.get("errors", [])
+                else:
+                    trace["exec_applied"] = getattr(exec_result, "applied", [])
+                    trace["exec_skipped"] = getattr(exec_result, "skipped", [])
+                    trace["exec_errors"] = getattr(exec_result, "errors", [])
+                trace["greedy"] = False
 
         exec_errors = trace.get("exec_errors", [])
         if exec_errors:
@@ -457,13 +481,14 @@ async def run_vision_plan(
         if violations_before_count > 0 and violations_after_count >= violations_before_count:
             logger.warning(
                 "VP plan did not reduce violations (before=%d, after=%d) "
-                "for %s — reverting to original PDF",
+                "for %s — reverting to deterministic baseline",
                 violations_before_count,
                 violations_after_count,
                 pdf_path.name,
             )
-            # Revert: copy original PDF back over the temp output
-            shutil.copy2(str(pdf_path), str(tmp_output))
+            # Revert to the deterministic baseline (working_path), which equals
+            # the original input when the deterministic router didn't run.
+            shutil.copy2(str(working_path), str(tmp_output))
             trace["passed"] = False
             trace["failure_reasons"].append(
                 f"VP plan did not reduce violations "
@@ -479,11 +504,16 @@ async def run_vision_plan(
             shutil.copy2(tmp_output, pdf_output_path)
             trace["pdf_output"] = str(pdf_output_path)
 
-        # Clean up temp file
+        # Clean up temp files
         try:
             tmp_output.unlink()
         except OSError:
             pass
+        if working_path != pdf_path:
+            try:
+                working_path.unlink()
+            except OSError:
+                pass
 
     except Exception as e:
         logger.error("Vision-plan pipeline failed: %s", e)

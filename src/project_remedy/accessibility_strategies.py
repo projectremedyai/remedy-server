@@ -560,9 +560,18 @@ class FigureRemediation(BaseRemediationStrategy):
                 figure["id"] = img["id"]
                 del img["id"]
 
-            img_parent = img.parent
-            img.extract()
-            figure.append(img)
+            # Drop figure into img's exact position to preserve reading order,
+            # then move img inside it. ``replace_with`` puts ``figure`` where
+            # ``img`` was; ``figure.append(img)`` re-parents img into figure.
+            if img.parent is not None:
+                img.replace_with(figure)
+                figure.append(img)
+            else:
+                # Detached image (no parent) — fall back to body append.
+                figure.append(img)
+                body = soup.find("body")
+                if body:
+                    body.append(figure)
 
             if caption_text:
                 figcaption = soup.new_tag("figcaption")
@@ -573,13 +582,6 @@ class FigureRemediation(BaseRemediationStrategy):
                     figure.insert(0, figcaption)
                 else:
                     figure.append(figcaption)
-
-            if img_parent and isinstance(img_parent, Tag):
-                img_parent.append(figure)
-            else:
-                body = soup.find("body")
-                if body:
-                    body.append(figure)
 
             fixes.append(
                 "Wrapped image in <figure>" +
@@ -600,8 +602,10 @@ class FigureRemediation(BaseRemediationStrategy):
         if img.get("alt") and len(img["alt"]) > 10:
             return img["alt"]
 
-        # From adjacent "Figure N" paragraph.
-        next_p = img.find_next("p")
+        # From adjacent "Figure N" paragraph. Only consider the *immediate*
+        # next-sibling <p> — ``find_next("p")`` scans the whole document and
+        # would decompose an unrelated paragraph far below the image.
+        next_p = img.find_next_sibling("p")
         if next_p:
             p_text = next_p.get_text(strip=True)
             if p_text.startswith(("Figure", "Fig.")):
@@ -1038,12 +1042,26 @@ class ImageRemediation(BaseRemediationStrategy):
         src = img.get("src", "")
 
         # Try vision-based generation if we can resolve the image path.
+        # Constrain candidates to image_dir so a hostile ``src`` (absolute
+        # path, ``../`` traversal) can't escape into arbitrary filesystem
+        # reads when the resolved bytes are later sent to the vision model.
+        def _safe_resolve(base: Path, candidate: Path) -> Path | None:
+            try:
+                resolved = (base / candidate).resolve(strict=False)
+                resolved.relative_to(base.resolve())
+                return resolved
+            except (ValueError, OSError):
+                return None
+
         if image_dir and src:
-            image_path = Path(image_dir) / src
-            if not image_path.exists():
-                # Try just the filename.
-                image_path = Path(image_dir) / Path(src).name
-            if image_path.exists():
+            base = Path(image_dir)
+            # Use Path(src) directly so ``src`` like "/etc/passwd" or
+            # "../../secrets" is treated as a relative candidate under base
+            # after normalization — _safe_resolve rejects anything that
+            # escapes ``base``.
+            candidate_rel = Path(str(src).lstrip("/"))
+            image_path = _safe_resolve(base, candidate_rel) or _safe_resolve(base, Path(Path(src).name))
+            if image_path is not None and image_path.exists():
                 try:
                     prompt = (
                         "Generate concise, descriptive alt text for this "
@@ -1148,6 +1166,18 @@ class LandmarkRemediation(BaseRemediationStrategy):
         nav = soup.find("nav") or soup.find(attrs={"role": "navigation"})
         footer = soup.find("footer") or soup.find(attrs={"role": "contentinfo"})
 
+        # Skip links must stay the first focusable element — leave them at the
+        # top of <body> rather than dragging them inside <main> (where they
+        # become unreachable on initial Tab and break the WCAG 2.4.1 bypass).
+        def _is_skip_link(t: Tag) -> bool:
+            if t.name != "a":
+                return False
+            classes = t.get("class") or []
+            if any("skip" in str(c).lower() for c in classes):
+                return True
+            href = t.get("href", "")
+            return isinstance(href, str) and href.startswith("#") and "skip" in t.get_text(strip=True).lower()
+
         outside_tags = {header, nav, footer}
         for child in list(body.children):
             if not isinstance(child, Tag):
@@ -1155,6 +1185,8 @@ class LandmarkRemediation(BaseRemediationStrategy):
             if child in outside_tags:
                 continue
             if child.name in ("script", "style", "noscript"):
+                continue
+            if _is_skip_link(child):
                 continue
             main.append(child.extract())
 
@@ -1681,7 +1713,25 @@ class TableRemediation(BaseRemediationStrategy):
         if not headers:
             return
 
-        # Assign IDs to headers that lack them.
+        # Assign IDs to headers that lack them. Multiple <th> elements can
+        # share text (e.g. repeated "Total" columns); track assigned ids so
+        # duplicates get a numeric suffix instead of colliding (which makes
+        # the document fail WCAG 4.1.1 "Parsing" and confuses headers="…").
+        assigned: set[str] = {
+            existing for existing in (th.get("id") for th in headers) if existing
+        }
+
+        def _unique(candidate: str) -> str:
+            if candidate not in assigned:
+                assigned.add(candidate)
+                return candidate
+            n = 2
+            while f"{candidate}-{n}" in assigned:
+                n += 1
+            chosen = f"{candidate}-{n}"
+            assigned.add(chosen)
+            return chosen
+
         for i, th in enumerate(headers):
             if th.get("id"):
                 continue
@@ -1690,9 +1740,9 @@ class TableRemediation(BaseRemediationStrategy):
                 id_text = re.sub(r"[^a-z0-9]+", "-", text)[:20]
                 if not id_text or not id_text[0].isalpha():
                     id_text = f"header-{i + 1}"
-                th["id"] = f"th-{id_text}"
+                th["id"] = _unique(f"th-{id_text}")
             else:
-                th["id"] = f"th-{i + 1}"
+                th["id"] = _unique(f"th-{i + 1}")
 
         # Build a position map.
         header_map: dict[tuple[int, int], str] = {}

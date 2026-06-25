@@ -16,6 +16,21 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from slowapi import Limiter
+from starlette.background import BackgroundTask
+
+
+# Modes wired up in faithful_rebuild today. Keep in sync with
+# project_remedy.faithful_rebuild.pipeline.faithful_rebuild.
+_REBUILD_MODES: frozenset[str] = frozenset({"preserving"})
+
+
+def _cleanup(path: Path) -> BackgroundTask:
+    """BackgroundTask that deletes ``path`` after the response is sent.
+
+    Use on FileResponse for inline outputs the client doesn't re-fetch by token
+    (otherwise the file accumulates under job_dir).
+    """
+    return BackgroundTask(lambda: path.unlink(missing_ok=True))
 
 from backend.app.auth import require_api_key_dependency
 from backend.app.config import Settings
@@ -76,6 +91,12 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
         dst = src.with_suffix(".fixed.pdf")
         try:
             cfg = load_config()
+            # TODO(REMEDY-57): thread a vision_result here so vision-aware
+            # checks (reading order, contrast) don't silently degrade to
+            # "Manual Check Needed". Requires either accepting a precomputed
+            # vision result on the request or invoking the configured vision
+            # provider internally — both involve coordination with
+            # project_remedy.pdf_fixer.fix_and_verify's signature.
             report = await asyncio.to_thread(
                 fix_and_verify, src, dst, config=cfg, original_path=src,
             )
@@ -139,10 +160,10 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
             return FileResponse(
                 dst, media_type="application/pdf",
                 filename=f"{Path(file.filename or 'out').stem}_{rule_id}.pdf",
+                background=_cleanup(dst),
             )
         finally:
             src.unlink(missing_ok=True)
-            # dst is returned by FastAPI; it'll be deleted on next gc cycle of job_dir.
 
     # ------------------------------------------------------------------
     # /vision/alt-text — generate alt text for a single uploaded image
@@ -244,7 +265,7 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
             await remediator.remediate_document(str(src), str(dst), level=cfg.contrast.level)
             if not dst.exists():
                 raise HTTPException(status_code=500, detail="Contrast fix did not produce output.")
-            return FileResponse(dst, media_type="application/pdf")
+            return FileResponse(dst, media_type="application/pdf", background=_cleanup(dst))
         finally:
             src.unlink(missing_ok=True)
 
@@ -259,11 +280,15 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
         mode: str = Form("preserving"),
         file: UploadFile = File(...),
     ) -> JSONResponse:
-        """Faithful PDF rebuild. ``mode`` accepts ``preserving`` (default),
-        ``mode_a``, ``mode_b``, or ``simple_font``.
-        """
+        """Faithful PDF rebuild. ``mode`` accepts the values in ``_REBUILD_MODES``."""
         from project_remedy.config import load_config
         from project_remedy.faithful_rebuild.pipeline import faithful_rebuild
+
+        if mode not in _REBUILD_MODES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported rebuild mode. Known: {', '.join(sorted(_REBUILD_MODES))}.",
+            )
 
         src = await _stage_pdf(file, settings)
         dst = src.with_suffix(f".rebuilt.{mode}.pdf")
@@ -272,6 +297,10 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
             result = await asyncio.to_thread(
                 faithful_rebuild, src, dst, config=cfg, force_mode=mode,
             )
+            # TODO(REMEDY-69): after rebuild, run the Tier-1 acceptance + ACR
+            # workflow against ``dst`` and include the post-rebuild acceptance
+            # state in the response so callers don't have to chain a second
+            # call to /fix to learn whether the rebuilt artifact passed.
             return JSONResponse({
                 "mode": getattr(result, "mode", mode),
                 "success": bool(getattr(result, "success", dst.exists())),
@@ -284,9 +313,23 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
 
     @router.get("/rebuild/download/{token}", dependencies=[require_key])
     async def rebuild_download(token: str) -> FileResponse:
-        if not token.endswith(".pdf") or "/" in token or "\\" in token:
+        # Only accept tokens produced by /rebuild: ``_pdf-<uuid>.rebuilt.<mode>.pdf``.
+        # The narrower shape blocks downloads of unrelated PDFs that happen to
+        # sit in job_dir (e.g. another route's *.fixed.pdf / *.contrast.pdf).
+        if (
+            "/" in token
+            or "\\" in token
+            or not token.startswith("_pdf-")
+            or ".rebuilt." not in token
+            or not token.endswith(".pdf")
+        ):
             raise HTTPException(status_code=400, detail="Bad token.")
         path = settings.job_dir / token
+        # Defense-in-depth: verify the resolved path is still inside job_dir.
+        try:
+            path.resolve(strict=False).relative_to(settings.job_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Bad token.")
         if not path.exists():
             raise HTTPException(status_code=404, detail="No such rebuilt PDF.")
         return FileResponse(path, media_type="application/pdf")
@@ -318,7 +361,7 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
                     status_code=500,
                     detail="Redistill did not produce output. Check GHOSTSCRIPT_ENABLED + GHOSTSCRIPT_PATH.",
                 )
-            return FileResponse(dst, media_type="application/pdf")
+            return FileResponse(dst, media_type="application/pdf", background=_cleanup(dst))
         finally:
             src.unlink(missing_ok=True)
 
@@ -357,7 +400,7 @@ def build_router(settings: Settings, limiter: Limiter, upload_rate_limit: str) -
                     status_code=500,
                     detail=f"ocrmypdf failed (exit {proc.returncode}): {proc.stderr[:500]}",
                 )
-            return FileResponse(dst, media_type="application/pdf")
+            return FileResponse(dst, media_type="application/pdf", background=_cleanup(dst))
         finally:
             src.unlink(missing_ok=True)
 

@@ -1584,6 +1584,7 @@ class HTMLConverter:
             meta_description=self._escape_html(meta_description)[:160],
             canonical_url=canonical_url,
             doc_department=doc_department,
+            accessibility_email=self._campus.accessibility_email,
         )
 
     # ------------------------------------------------------------------

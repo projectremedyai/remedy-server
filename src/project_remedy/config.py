@@ -35,6 +35,10 @@ class BrandingConfig:
     brand_primary: str = "#0b5ed7"
     brand_accent: str = "#fd7e14"
     brand_neutral: str = "#6c757d"
+    # URL used as the href for the "Report an Accessibility Issue" link in
+    # generated HTML. Typically a mailto: address; may also be a contact-form
+    # URL. Empty string renders an inert link rather than raising KeyError.
+    accessibility_email: str = ""
 
 
 @dataclass(frozen=True)
