@@ -11,12 +11,13 @@ import argparse
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from project_remedy.config import load_config
+from project_remedy.levels import classify_level, probe_structure, summarize_levels
 from project_remedy.pdf_acceptance import evaluate_pdf_acceptance
 from project_remedy.pdf_fixer import fix_and_verify
 from project_remedy.tag_tree_reader import Severity
@@ -50,6 +51,12 @@ class CorpusRecord:
     fix_skipped: list[str]
     error: str = ""
     completed_at: str = ""
+    # Phase 0 remediation-level fields (defaults keep old manifests readable).
+    root: str = ""
+    level: str = ""
+    level_blocking: list[str] = field(default_factory=list)
+    needs_human: list[str] = field(default_factory=list)
+    sub_scores: dict[str, Any] = field(default_factory=dict)
 
 
 def _source_files(input_roots: list[Path]) -> list[tuple[Path, Path]]:
@@ -168,6 +175,11 @@ def _evaluate(source: Path, output: Path, config) -> tuple[Any, bool]:
     return acceptance, _is_clean(acceptance)
 
 
+def _classify(path: Path, acceptance):
+    """Probe ``path`` and assign an L0–L4 level. Never raises."""
+    return classify_level(acceptance, probe_structure(path))
+
+
 def _record(
     *,
     source: Path,
@@ -179,6 +191,8 @@ def _record(
     fix_changes: list[str],
     fix_skipped: list[str],
     error: str = "",
+    root: Path | None = None,
+    level_result=None,
 ) -> CorpusRecord:
     return CorpusRecord(
         source=str(source),
@@ -201,6 +215,11 @@ def _record(
         fix_skipped=fix_skipped,
         error=error,
         completed_at=datetime.now(timezone.utc).isoformat(),
+        root="" if root is None else str(root),
+        level="" if level_result is None else level_result.level,
+        level_blocking=[] if level_result is None else list(level_result.blocking_conditions),
+        needs_human=[] if level_result is None else list(level_result.needs_human),
+        sub_scores={} if level_result is None else dict(level_result.sub_scores),
     )
 
 
@@ -228,11 +247,43 @@ def run(args: argparse.Namespace) -> int:
     limit = args.limit if args.limit and args.limit > 0 else None
     selected = files[:limit] if limit else files
 
+    classify_only = getattr(args, "classify_only", False)
+    summary_rows: list[dict[str, Any]] = []
+
     failures = 0
     for index, (root, source) in enumerate(selected, 1):
         output = _output_path(output_root, root, source)
         if str(source) in done:
             print(f"[{index}/{len(selected)}] SKIP clean {source.name}", flush=True)
+            continue
+
+        # --- Baseline classify-only: evaluate the SOURCE as-is, no remediation.
+        if classify_only:
+            print(f"[{index}/{len(selected)}] CLASSIFY {source}", flush=True)
+            start = time.time()
+            acceptance = None
+            try:
+                acceptance, _ = _evaluate(source, source, config)
+            except Exception as exc:  # noqa: BLE001
+                print(f"    classify error: {exc}", flush=True)
+            level_result = _classify(source, acceptance)
+            record = _record(
+                source=source,
+                output=source,
+                status="classified",
+                elapsed_seconds=time.time() - start,
+                acceptance=acceptance,
+                clean=False,
+                fix_changes=[],
+                fix_skipped=[],
+                root=root,
+                level_result=level_result,
+            )
+            _append_record(manifest_path, record)
+            summary_rows.append(
+                {"root": str(root), "level": record.level, "needs_human": record.needs_human}
+            )
+            print(f"    -> {record.level} blocking={record.level_blocking}", flush=True)
             continue
 
         print(f"[{index}/{len(selected)}] {source}", flush=True)
@@ -292,6 +343,8 @@ def run(args: argparse.Namespace) -> int:
                 clean=clean,
                 fix_changes=fix_changes,
                 fix_skipped=fix_skipped,
+                root=root,
+                level_result=_classify(output, acceptance),
             )
         except Exception as exc:  # noqa: BLE001 - corpus runner records every failure
             failures += 1
@@ -305,17 +358,46 @@ def run(args: argparse.Namespace) -> int:
                 fix_changes=fix_changes,
                 fix_skipped=fix_skipped,
                 error=str(exc),
+                root=root,
+                level_result=_classify(output, acceptance),
             )
 
         _append_record(manifest_path, record)
+        summary_rows.append(
+            {"root": str(root), "level": record.level, "needs_human": record.needs_human}
+        )
         print(
-            f"    -> {record.status} clean={record.clean} "
+            f"    -> {record.status} level={record.level} clean={record.clean} "
             f"failures={len(record.checker_failures)} "
             f"manual={len(record.manual_checks)} "
             f"sr={len(record.screen_reader_errors)} "
             f"elapsed={record.elapsed_seconds}s",
             flush=True,
         )
+
+    # --- Burndown summary -------------------------------------------------
+    vision_enabled = fix_config is not None
+    summary = summarize_levels(
+        summary_rows,
+        vision_enabled=vision_enabled,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    summary_path = manifest_path.with_name(
+        manifest_path.stem + "_levels_summary.json"
+    )
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"Levels: {summary['totals']}  needs_human_total={summary['needs_human_total']}",
+        flush=True,
+    )
+    if not vision_enabled:
+        print(
+            "  NOTE: vision disabled — most files cap at L3. "
+            "L3 = machine-verified PDF/UA-1, NOT 'ADA compliant' "
+            "(that requires L5 human validation).",
+            flush=True,
+        )
+    print(f"  summary -> {summary_path}", flush=True)
 
     print(f"Done. failures={failures} manifest={manifest_path}", flush=True)
     return 1 if failures else 0
@@ -332,6 +414,12 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument(
+        "--classify-only",
+        action="store_true",
+        help="Baseline mode: classify each SOURCE file's as-is L0–L4 level "
+             "without remediating or writing outputs.",
+    )
     parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
     if not args.input_root:
