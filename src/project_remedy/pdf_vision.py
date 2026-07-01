@@ -157,6 +157,16 @@ class VisionProvider(Protocol):
 # ---------------------------------------------------------------------------
 
 
+class EmptyVisionResponse(RuntimeError):
+    """A vision endpoint returned HTTP 200 with an empty content string.
+
+    Some cloud models (notably minimax-m3) intermittently do this on the
+    ``/v1`` chat and ``/api/chat`` transports. It is a *soft*, transient
+    failure — a retry (or the more-reliable ``/api/generate`` transport)
+    usually succeeds — so it is classified transient rather than fatal.
+    """
+
+
 class OllamaVisionProvider:
     """Ollama (or any OpenAI-compatible) vision provider."""
 
@@ -268,6 +278,137 @@ class OllamaVisionProvider:
             except ValueError:
                 logger.warning("Invalid %s=%r; using max token cap %d", env_name, raw, cap)
         return max(1, min(int(requested), cap))
+
+    def _generate_fallback_enabled(self) -> bool:
+        """Whether to fall back to /api/generate on an empty response."""
+        raw = os.environ.get("OLLAMA_VISION_GENERATE_FALLBACK", "1").strip().lower()
+        return raw not in ("0", "false", "no", "off")
+
+    async def _call_generate(
+        self,
+        base_url: str,
+        prompt: str,
+        image_b64: str | None,
+        request_max_tokens: int,
+        *,
+        is_cloud: bool,
+        response_format: dict | None = None,
+    ) -> str:
+        """Call Ollama's native ``/api/generate`` endpoint and return its text.
+
+        Body shape ``{"model", "prompt", "images": [b64], "stream": false, …}``;
+        response text is ``data["response"]``. This transport is empirically
+        more reliable than ``/v1`` chat / ``/api/chat`` for models that emit
+        empty chat completions, so it is used as the empty-response recovery
+        path (see :meth:`_recover_empty_response`).
+        """
+        import httpx
+
+        gen_base = base_url[:-3] if base_url.endswith("/v1") else base_url
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "keep_alive": 0 if is_cloud else os.environ.get("OLLAMA_LOCAL_KEEP_ALIVE", "5m"),
+            "options": {"temperature": 0.2, "num_predict": request_max_tokens},
+        }
+        if image_b64 is not None:
+            payload["images"] = [image_b64]
+        if response_format is not None:
+            payload["format"] = response_format
+        async with httpx.AsyncClient(
+            base_url=gen_base,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(self.timeout_seconds, connect=30.0),
+            trust_env=False,
+        ) as client:
+            resp = await asyncio.wait_for(
+                client.post("/api/generate", json=payload),
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        text = data.get("response", "") or ""
+        input_tokens = data.get("prompt_eval_count", 0)
+        output_tokens = data.get("eval_count", 0)
+        if input_tokens or output_tokens:
+            tracker.record(
+                "ollama-vision",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        return text
+
+    async def _recover_empty_response(
+        self,
+        base_url: str,
+        prompt: str,
+        image_b64: str | None,
+        request_max_tokens: int,
+        *,
+        is_cloud: bool,
+        response_format: dict | None = None,
+    ) -> str:
+        """Recover from an empty chat response via bounded ``/api/generate``
+        retries. Returns the recovered text or ``""`` if disabled / still empty.
+
+        Called while the caller still holds the endpoint concurrency gate, so it
+        deliberately does NOT re-acquire a slot. Attempt count is
+        ``OLLAMA_VISION_EMPTY_RETRIES`` + 1 (default 3)."""
+        if not self._generate_fallback_enabled():
+            return ""
+        import httpx
+
+        try:
+            tries = max(1, int(os.environ.get("OLLAMA_VISION_EMPTY_RETRIES", "2")) + 1)
+        except ValueError:
+            tries = 3
+        for i in range(tries):
+            try:
+                text = await self._call_generate(
+                    base_url,
+                    prompt,
+                    image_b64,
+                    request_max_tokens,
+                    is_cloud=is_cloud,
+                    response_format=response_format,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Vision /api/generate fallback failed on %s (try %d/%d): %s",
+                    base_url, i + 1, tries,
+                    str(exc).strip() or exc.__class__.__name__,
+                )
+                transient = isinstance(
+                    exc,
+                    (
+                        httpx.TimeoutException,
+                        httpx.ConnectError,
+                        httpx.ReadError,
+                        httpx.RemoteProtocolError,
+                        httpx.NetworkError,
+                    ),
+                ) or (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in (429, 500, 502, 503, 504)
+                )
+                if transient and i < tries - 1:
+                    await asyncio.sleep(min(self.retry_backoff_seconds * (i + 1), 10.0))
+                    continue
+                return ""
+            if str(text).strip():
+                if i > 0:
+                    logger.info(
+                        "Vision /api/generate fallback recovered on try %d/%d", i + 1, tries
+                    )
+                return text
+            if i < tries - 1:
+                await asyncio.sleep(min(self.retry_backoff_seconds, 3.0))
+        return ""
 
     async def analyze_image(
         self,
@@ -407,7 +548,21 @@ class OllamaVisionProvider:
                         output_tokens=output_tokens,
                     )
                 if not str(response_text).strip():
-                    raise RuntimeError("empty vision response")
+                    # minimax-m3 (and similar) intermittently return an empty
+                    # completion on a 200. Recover via the more-reliable
+                    # /api/generate transport before failing this attempt.
+                    recovered = await self._recover_empty_response(
+                        base_url,
+                        prompt,
+                        image_b64,
+                        request_max_tokens,
+                        is_cloud=is_cloud,
+                        response_format=response_format,
+                    )
+                    if str(recovered).strip():
+                        self.last_base_url = base_url
+                        return recovered
+                    raise EmptyVisionResponse("empty vision response")
                 return response_text
             except Exception as exc:
                 last_exc = exc
@@ -421,8 +576,10 @@ class OllamaVisionProvider:
 
                 # Decide whether to retry with backoff or fall through to the
                 # next node/attempt. Transient failures (5xx, timeouts, network
-                # errors) get exponential backoff before the next attempt.
-                is_transient = False
+                # errors) get exponential backoff before the next attempt. An
+                # empty response is transient too — after its /api/generate
+                # recovery is exhausted, allow node rotation / retry.
+                is_transient = isinstance(exc, EmptyVisionResponse)
                 try:
                     if isinstance(exc, httpx.HTTPStatusError):
                         status = exc.response.status_code
