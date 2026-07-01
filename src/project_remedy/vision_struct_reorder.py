@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 
 import pikepdf
@@ -97,6 +98,46 @@ def _count_leaves(root):
 
     walk(root)
     return n
+
+
+def _verify_rebuild(pdf, container, before_leaves):
+    """Structural self-check run right after :func:`_rebuild`, scoped to the
+    rebuild's blast radius (the container and its direct children).
+
+    Returns ``(ok, reason)``. Catches the ways a rebuild can corrupt the tree
+    that a leaf-count check alone cannot see — a child left pointing at the
+    wrong parent (broken ``/P``↔``/K`` bijection) or a unit added to ``/K``
+    twice — while deliberately NOT walking the whole tree, so a pre-existing
+    issue upstream of the container (which the reorder never touched) cannot
+    trigger a needless revert.
+    """
+    # 1. no MCID-bearing leaf dropped (the original integrity check)
+    after = _count_leaves(pdf.Root.StructTreeRoot)
+    if after != before_leaves:
+        return False, f"leaf count {before_leaves}->{after}"
+    # 2. every direct child of the container points back to it via /P, and no
+    #    child object appears twice in the rebuilt /K.
+    seen = set()
+    for kid in _kids(container):
+        if not isinstance(kid, pikepdf.Dictionary):
+            continue
+        try:
+            oid = kid.objgen
+        except Exception:
+            oid = None
+        if oid is not None:
+            if oid in seen:
+                return False, "duplicate child in container /K"
+            seen.add(oid)
+        if _stype(kid) is None:
+            continue
+        p = kid.get("/P")
+        try:
+            if p is None or p.objgen != container.objgen:
+                return False, "child /P does not point to its container"
+        except Exception:
+            return False, "child /P unresolved"
+    return True, ""
 
 
 def _node_page(n, pidx, inherited):
@@ -203,36 +244,147 @@ def _renormalize_headings(ordered_by_page):
     return changed
 
 
+def _subtree_min_rank(node, rank, _seen=None):
+    """Smallest unit-rank of any collected leaf in *node*'s subtree, or +inf."""
+    if _seen is None:
+        _seen = set()
+    best = math.inf
+    try:
+        og = node.objgen
+    except Exception:
+        og = None
+    if og is not None:
+        if og in _seen:
+            return best
+        _seen.add(og)
+        if og in rank:
+            best = rank[og]
+    for kid in _kids(node):
+        if isinstance(kid, pikepdf.Dictionary):
+            best = min(best, _subtree_min_rank(kid, rank, _seen))
+    return best
+
+
+def _reorder_children_by_rank(node, rank):
+    """Reorder *node*'s element children into reading order, in place, recursively.
+
+    Only a PURE grouping node — one whose every /K entry is a struct element —
+    has its /K reordered (by each child subtree's earliest unit-rank). A node
+    that directly holds MCIDs / MCR (a content leaf, or mixed) is left untouched
+    so no marked content is dropped or misordered. Subtrees with no ranked unit
+    (e.g. artifact-only sections) keep their original slots. Nothing is ever
+    re-parented, so /P<->/K stays consistent and grouped structures (lists,
+    TOCs, sections) are preserved."""
+    kids = list(_kids(node))
+    if not kids:
+        return
+    if any(not (isinstance(k, pikepdf.Dictionary) and _stype(k) is not None)
+           for k in kids):
+        for k in kids:
+            if isinstance(k, pikepdf.Dictionary) and _stype(k) is not None:
+                _reorder_children_by_rank(k, rank)
+        return
+    ranks = [_subtree_min_rank(k, rank) for k in kids]
+    have = [i for i, rk in enumerate(ranks) if rk != math.inf]
+    if len(have) >= 2:
+        order = sorted(have, key=lambda i: ranks[i])
+        result = list(kids)
+        for slot, src in zip(have, order):
+            result[slot] = kids[src]
+        node["/K"] = pikepdf.Array(result)
+        kids = result
+    for k in kids:
+        _reorder_children_by_rank(k, rank)
+
+
+def _snapshot_subtree(node, snap):
+    """Record each element's /K and /S so a rebuild can be fully reverted (the
+    reorder mutates /K at many nodes and /S on renormalized headings)."""
+    try:
+        og = node.objgen
+    except Exception:
+        return
+    if og in snap:
+        return
+    k = node.get("/K")
+    if isinstance(k, pikepdf.Array):
+        k_snap = ("array", list(k))
+    elif k is not None:
+        k_snap = ("single", k)
+    else:
+        k_snap = ("none", None)
+    snap[og] = (node, k_snap, node.get("/S"))
+    for kid in _kids(node):
+        if isinstance(kid, pikepdf.Dictionary):
+            _snapshot_subtree(kid, snap)
+
+
+def _restore_subtree(snap):
+    """Undo a rebuild from a :func:`_snapshot_subtree` snapshot."""
+    for _og, (node, k_snap, s) in snap.items():
+        kind, val = k_snap
+        try:
+            if kind == "array":
+                node["/K"] = pikepdf.Array(val)
+            elif kind == "single":
+                node["/K"] = val
+            elif "/K" in node:
+                del node["/K"]
+            if s is not None:
+                node["/S"] = s
+        except Exception:
+            continue
+
+
+def _verapdf_rule_ids(pdf):
+    """Save *pdf* to a temp file and return the set of failed veraPDF rule ids,
+    or None if veraPDF is unavailable (so the caller skips the delta check)."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    try:
+        pdf.save(tmp.name)
+        from project_remedy.pdf_acceptance import validate_with_verapdf
+        res = validate_with_verapdf(Path(tmp.name))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("verapdf delta check unavailable: %s", exc)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+    if not getattr(res, "checked", False):
+        return None
+    return {v.get("id", "?") for v in (getattr(res, "violations", None) or [])}
+
+
 def _rebuild(container, pdf, ordered_by_page):
-    """Rebuild container /K from page-ordered unit lists, re-wrapping LI runs."""
-    new_k = pikepdf.Array()
+    """Reorder the struct tree into the desired reading order WITHOUT flattening.
+
+    Builds a global rank for each atomic unit (page order, then the vision order
+    within each page) and reorders element children *in place* at every pure-
+    grouping node in the container subtree. Whole subtrees (/Sect, /L, /TOC, …)
+    move by the earliest unit they contain, and the leaves inside a grouping
+    node are reordered among themselves — but no element is ever re-parented and
+    no new /L wrapper is created, so /P<->/K stays consistent and grouped
+    structures (lists, tables of contents, sections) are preserved. This fixes
+    the earlier flatten that pulled TOCI/leaves out of their parents and broke
+    veraPDF 7.2-26 / 7.4.2-1 on grouped documents. (*pdf* is retained for
+    signature stability; no longer used.)"""
+    rank = {}
+    r = 0
     for page_idx in sorted(ordered_by_page):
-        units = ordered_by_page[page_idx]
-        i = 0
-        while i < len(units):
-            u = units[i]
-            if u["kind"] == "li":
-                run = [u]
-                j = i + 1
-                while j < len(units) and units[j]["kind"] == "li":
-                    run.append(units[j])
-                    j += 1
-                lst = pdf.make_indirect(pikepdf.Dictionary({
-                    "/Type": pikepdf.Name("/StructElem"),
-                    "/S": pikepdf.Name("/L"),
-                    "/P": container,
-                    "/K": pikepdf.Array(),
-                }))
-                for li in run:
-                    li["elem"]["/P"] = lst
-                    lst["/K"].append(li["elem"])
-                new_k.append(lst)
-                i = j
-            else:
-                u["elem"]["/P"] = container
-                new_k.append(u["elem"])
-                i += 1
-    container["/K"] = new_k
+        for u in ordered_by_page[page_idx]:
+            try:
+                rank[u["elem"].objgen] = r
+            except Exception:
+                pass
+            r += 1
+    _reorder_children_by_rank(container, rank)
 
 
 # --------------------------------------------------------------------------- #
@@ -426,14 +578,20 @@ def _render_page(pdf_path, page_num, dpi):
 
 
 def reorder_struct_vision(pdf, vision_fn, *, pdf_path=None, target_pages=None,
-                          max_units=64, dpi=110):
+                          max_units=64, dpi=110, verify_verapdf=False):
     """Reorder the struct tree to the vision-derived reading order, in place.
 
     *vision_fn(image_path, prompt) -> str* performs the model call. *pdf_path*
     is the on-disk path used for rendering (defaults to ``pdf.filename``).
-    Returns a report dict. A struct-leaf-count integrity check reverts the whole
-    rebuild (by not saving — the caller decides) if content would be dropped;
-    here we restore the original /K on integrity failure.
+    Returns a report dict.
+
+    The rebuild is hierarchy-preserving (see :func:`_rebuild`) and is committed
+    only if it passes the integrity gate: struct-leaf count preserved and the
+    /P<->/K bijection intact (:func:`_verify_rebuild`). When *verify_verapdf* is
+    true, the rebuild is additionally reverted if it introduces ANY new veraPDF
+    PDF/UA-1 failure versus the pre-reorder state (a before/after delta — so a
+    file that already fails an unrelated font clause is not blamed on the
+    reorder). On any gate failure the whole subtree is restored.
     """
     rep = {"pages_vision": 0, "pages_skipped": 0, "pages_table": 0,
            "changed": False, "notes": []}
@@ -447,7 +605,6 @@ def reorder_struct_vision(pdf, vision_fn, *, pdf_path=None, target_pages=None,
 
     pidx = _page_index_map(pdf)
     container = _descend_to_container(pdf)
-    original_k = container.get("/K")
     all_units = _collect_units(container, pdf, pidx)
 
     ordered_by_page = {}
@@ -486,16 +643,25 @@ def reorder_struct_vision(pdf, vision_fn, *, pdf_path=None, target_pages=None,
     if not any_change:
         return rep
     before = _count_leaves(pdf.Root.StructTreeRoot)
+    snap = {}
+    _snapshot_subtree(container, snap)
+    before_rules = _verapdf_rule_ids(pdf) if verify_verapdf else None
     hc = _renormalize_headings(ordered_by_page)
     if hc:
         rep["notes"].append(f"renormalized {hc} heading levels")
     _rebuild(container, pdf, ordered_by_page)
-    after = _count_leaves(pdf.Root.StructTreeRoot)
-    if after != before:
-        if original_k is not None:
-            container["/K"] = original_k   # integrity failure -> restore
+    ok, reason = _verify_rebuild(pdf, container, before)
+    if ok and before_rules is not None:
+        after_rules = _verapdf_rule_ids(pdf)
+        if after_rules is not None:
+            new_rules = after_rules - before_rules
+            if new_rules:
+                ok = False
+                reason = "introduced veraPDF failure(s): " + ", ".join(sorted(new_rules))
+    if not ok:
+        _restore_subtree(snap)   # full revert (multi-node /K + heading /S)
         rep["changed"] = False
-        rep["notes"].append(f"ABORTED: leaf count {before}->{after}")
+        rep["notes"].append(f"ABORTED: {reason}")
     return rep
 
 
@@ -517,17 +683,19 @@ def _provider_vision_fn(vision_provider):
 
 
 def fix_struct_reading_order_vision(pdf, vision_provider=None, *,
-                                    thorough=False) -> list:
+                                    thorough=False, verify_verapdf=True) -> list:
     """fix_all-compatible wrapper: vision-driven cross-parent struct reorder.
 
     Runs only when a *vision_provider* is supplied. Returns a list of
-    human-readable change messages.
+    human-readable change messages. *verify_verapdf* defaults on: the reorder is
+    reverted if it introduces any new PDF/UA-1 failure (the vision path is
+    already expensive, so one before/after veraPDF check is cheap insurance).
     """
     if vision_provider is None:
         return []
     try:
         vision_fn = _provider_vision_fn(vision_provider)
-        rep = reorder_struct_vision(pdf, vision_fn)
+        rep = reorder_struct_vision(pdf, vision_fn, verify_verapdf=verify_verapdf)
     except Exception as exc:  # never abort remediation
         logger.warning("vision struct reorder failed: %s", exc)
         return []

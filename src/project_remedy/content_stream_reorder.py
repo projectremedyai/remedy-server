@@ -545,10 +545,43 @@ def reorder_file_to_struct_order(path, out_path=None, *, dpi=110,
     return rep
 
 
-def reorder_pdf_in_place(pdf: pikepdf.Pdf, *, dpi=110, max_diff=0.0003):
+def _verapdf_rule_ids_bytes(data: bytes):
+    """Failed veraPDF PDF/UA-1 rule ids for *data* (PDF bytes), or None if
+    veraPDF is unavailable (so the caller skips the delta check)."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    try:
+        Path(tmp.name).write_bytes(data)
+        from project_remedy.pdf_acceptance import validate_with_verapdf
+        res = validate_with_verapdf(Path(tmp.name))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("verapdf delta check unavailable: %s", exc)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+    if not getattr(res, "checked", False):
+        return None
+    return {v.get("id", "?") for v in (getattr(res, "violations", None) or [])}
+
+
+def reorder_pdf_in_place(pdf: pikepdf.Pdf, *, dpi=110, max_diff=0.0003,
+                         verify_verapdf=False):
     """Reorder an already-open Pdf's content streams to struct order, render-
     gated. If any page would render beyond *max_diff*, the entire reorder is
     reverted (page /Contents restored). Returns (pages_reordered, note).
+
+    When *verify_verapdf* is true, the reorder is ALSO reverted if it introduces
+    any new PDF/UA-1 failure versus the pre-reorder state (a before/after delta).
+    The render gate guarantees pixel fidelity but a content-stream re-serialize
+    can still surface a font-program/CID clause veraPDF flags; this backstop
+    keeps the pass from ever shipping a new violation.
 
     Used by the fix_all pipeline so a single ``remedy pdf fix`` run aligns the
     physical content order with the logical structure order it just built.
@@ -573,29 +606,44 @@ def reorder_pdf_in_place(pdf: pikepdf.Pdf, *, dpi=110, max_diff=0.0003):
             saved.pop(idx, None)
     if total == 0:
         return 0, "already in struct order"
+
+    def _revert(reason):
+        for idx, page in enumerate(pdf.pages):
+            if saved.get(idx) is not None:
+                page.obj["/Contents"] = saved[idx]
+        return 0, reason
+
     try:
         buf1 = io.BytesIO()
         pdf.save(buf1)
         after = _render_pages(buf1.getvalue(), dpi)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         after = None
     ok = after is not None and len(before) == len(after)
     worst = (max((_diff_fraction(a, b) for a, b in zip(before, after)),
                  default=1.0) if ok else 1.0)
     if worst > max_diff:
-        for idx, page in enumerate(pdf.pages):  # revert
-            if saved.get(idx) is not None:
-                page.obj["/Contents"] = saved[idx]
-        return 0, f"reverted (render diff {worst:.5f} > {max_diff})"
+        return _revert(f"reverted (render diff {worst:.5f} > {max_diff})")
+    if verify_verapdf:
+        before_rules = _verapdf_rule_ids_bytes(buf0.getvalue())
+        after_rules = _verapdf_rule_ids_bytes(buf1.getvalue())
+        if before_rules is not None and after_rules is not None:
+            new_rules = after_rules - before_rules
+            if new_rules:
+                return _revert("reverted (introduced veraPDF failure(s): "
+                               + ", ".join(sorted(new_rules)) + ")")
     return total, f"render diff {worst:.5f}"
 
 
-def fix_content_stream_order(pdf: pikepdf.Pdf) -> list:
-    """fix_all-compatible wrapper: returns a list of human-readable changes."""
+def fix_content_stream_order(pdf: pikepdf.Pdf, *, verify_verapdf=True) -> list:
+    """fix_all-compatible wrapper: returns a list of human-readable changes.
+
+    *verify_verapdf* defaults on so the reorder self-reverts rather than ship a
+    new PDF/UA-1 failure (symmetric with the struct-tree reorder gate)."""
     try:
-        n, note = reorder_pdf_in_place(pdf)
-    except Exception as exc:  # noqa: BLE001
-        return [f"Content-stream reorder skipped: {exc}"] if False else []
+        n, note = reorder_pdf_in_place(pdf, verify_verapdf=verify_verapdf)
+    except Exception:  # noqa: BLE001
+        return []
     if n:
         return [f"Re-sequenced page content streams to match the structure-tree "
                 f"reading order ({n} blocks moved; {note})"]
