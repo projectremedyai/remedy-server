@@ -3,7 +3,7 @@
 # Multi-stage Dockerfile for remedy-server.
 # Builds a single image that includes every external binary the API's
 # optional endpoints need: Ghostscript, veraPDF (+ Java), ocrmypdf,
-# Node + pa11y + lighthouse, and Playwright Chromium.
+# Typst (rebuild backend), Node + pa11y + lighthouse, and Playwright Chromium.
 #
 # Target image size is ~2.5 GB. If you don't need HTML validation or
 # HTML→PDF conversion, use the `slim` target instead to drop Node +
@@ -100,7 +100,24 @@ RUN mkdir -p /opt/verapdf \
     && rm -rf /tmp/verapdf
 
 # ---------------------------------------------------------------------------
-# 4. Install Node + pa11y + Lighthouse
+# 4. Install Typst (rebuild backend, PRD_typst_backend.md NFR-3)
+# ---------------------------------------------------------------------------
+
+FROM base AS typst
+
+ARG TARGETARCH
+ARG TYPST_VERSION=0.15.0
+
+RUN case "${TARGETARCH}" in \
+        amd64) triple="x86_64-unknown-linux-musl" ;; \
+        arm64) triple="aarch64-unknown-linux-musl" ;; \
+        *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${triple}.tar.xz" \
+        | tar -xJ --strip-components=1 -C /usr/local/bin "typst-${triple}/typst"
+
+# ---------------------------------------------------------------------------
+# 5. Install Node + pa11y + Lighthouse
 # ---------------------------------------------------------------------------
 
 FROM base AS node-tools
@@ -113,7 +130,7 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
     && /opt/node/bin/npm cache clean --force
 
 # ---------------------------------------------------------------------------
-# 5. Python dependencies
+# 6. Python dependencies
 # ---------------------------------------------------------------------------
 
 FROM base AS python-deps
@@ -132,7 +149,7 @@ RUN pip install --upgrade pip setuptools wheel uv \
     && uv sync --frozen --no-dev --no-install-project --active --compile-bytecode
 
 # ---------------------------------------------------------------------------
-# 6. Playwright Chromium (requires Python env from step 5)
+# 7. Playwright Chromium (requires Python env from step 6)
 # ---------------------------------------------------------------------------
 
 FROM python-deps AS playwright
@@ -140,7 +157,7 @@ RUN playwright install --with-deps chromium \
     && rm -rf /root/.cache/ms-playwright/.links
 
 # ---------------------------------------------------------------------------
-# 7. Runtime image (combines everything + app source)
+# 8. Runtime image (combines everything + app source)
 # ---------------------------------------------------------------------------
 
 FROM base AS runtime
@@ -148,6 +165,7 @@ FROM base AS runtime
 COPY --from=verapdf /opt/verapdf /opt/verapdf
 RUN ln -s /opt/verapdf/verapdf /usr/local/bin/verapdf
 COPY --from=questpdf /out/remedy-questpdf /usr/local/bin/remedy-questpdf
+COPY --from=typst /usr/local/bin/typst /usr/local/bin/typst
 COPY --from=node-tools /opt/node /opt/node
 COPY --from=python-deps /opt/venv /opt/venv
 # Playwright browsers are in /root/.cache/ms-playwright after install;
@@ -189,7 +207,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
 # ---------------------------------------------------------------------------
-# 8. Optional slim target (no Node / Playwright — skips HTML validation
+# 9. Optional slim target (no Node / Playwright — skips HTML validation
 #     and HTML→PDF conversion, ~1.2 GB smaller)
 # ---------------------------------------------------------------------------
 
@@ -198,6 +216,7 @@ FROM base AS runtime-slim
 COPY --from=verapdf /opt/verapdf /opt/verapdf
 RUN ln -s /opt/verapdf/verapdf /usr/local/bin/verapdf
 COPY --from=questpdf /out/remedy-questpdf /usr/local/bin/remedy-questpdf
+COPY --from=typst /usr/local/bin/typst /usr/local/bin/typst
 COPY --from=python-deps /opt/venv /opt/venv
 
 WORKDIR /app

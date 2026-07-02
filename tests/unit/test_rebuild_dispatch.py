@@ -131,6 +131,10 @@ async def test_unknown_backend_fails_closed(patched_upstream, tmp_path):
     )
     final = store.last()
     assert final.get("status") == "failed"
+    # FR-6 fail-closed: unknown backends route through the same
+    # unsupported-construct error family as an explicit typst FR-6 bail-out,
+    # not a bespoke "unknown backend" code.
+    assert final.get("error", "").startswith("rebuild_typst_unsupported_construct:")
     assert "unknown backend" in final.get("error", "")
 
 
@@ -174,3 +178,47 @@ async def test_job_override_beats_config(patched_upstream, tmp_path, monkeypatch
     assert captured.get("backend") == "typst"
     assert final.get("status") == "failed"
     assert final.get("error", "").startswith("rebuild_typst_compile_failed:")
+
+
+async def test_meta_rebuild_backend_override_is_read(patched_upstream, tmp_path, monkeypatch):
+    """Exercises the CALLER plumbing in _remediate_pdf (engine_service.py
+    ~line 218): meta["rebuild_backend"] must reach _rebuild_from_semantics
+    as backend_override, even when cfg.rebuild.backend says otherwise.
+
+    fix_and_verify and evaluate_pdf_acceptance are stubbed so the tier-1
+    path always looks like it needs rebuild escalation (acceptance fails);
+    _rebuild_from_semantics itself is stubbed with a spy so this test stays
+    scoped to the plumbing, not backend-selection logic (already covered by
+    test_job_override_beats_config against _rebuild_from_semantics directly).
+    """
+    store = _FakeStore()
+    input_path = _blank_pdf(tmp_path / "in.pdf")
+
+    captured: dict = {}
+
+    async def fake_rebuild(input_path, output_path, cfg, job, store, settings, backend_override=None):
+        captured["backend_override"] = backend_override
+        await store.update(job.id, status="done", stage="complete", progress=1.0)
+
+    def fake_fix_and_verify(input_path, output_path, *, config, original_path, conformance_repair):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF")
+
+    def fake_evaluate(output_path, *, config, original_path):
+        return SimpleNamespace(
+            passed=False,
+            warning_reasons=[],
+            verapdf_result=SimpleNamespace(checked=True, passed=False),
+        )
+
+    monkeypatch.setattr(engine_service, "fix_and_verify", fake_fix_and_verify)
+    monkeypatch.setattr(engine_service, "evaluate_pdf_acceptance", fake_evaluate)
+    monkeypatch.setattr(engine_service, "_rebuild_from_semantics", fake_rebuild)
+    monkeypatch.setattr(engine_service, "load_config", lambda: _cfg(tmp_path, backend="questpdf"))
+
+    job = _job(input_path, {"allow_semantic_rebuild": True, "rebuild_backend": "typst"})
+    settings = SimpleNamespace(job_dir=tmp_path / "jobs")
+
+    await engine_service._remediate_pdf(job, store, settings)
+
+    assert captured.get("backend_override") == "typst"

@@ -226,6 +226,13 @@ All env-driven. See `.env.example` for the full list. Key knobs:
   Runtime checks reject same-family judge or behavioral models.
 - Ghostscript: `GHOSTSCRIPT_ENABLED`, `GHOSTSCRIPT_PATH`
 - veraPDF: `VERAPDF_PATH`
+- Rebuild tier (semantic-rebuild escalation, opt-in per job via `allow_semantic_rebuild`):
+  `REBUILD_ENABLED` (default `true`), `REBUILD_BACKEND=questpdf|typst` (default `questpdf`),
+  `REBUILD_TYPST_TIMEOUT_S` (default `120`). Per job, `POST /v1/remediate` also accepts an
+  `allow_semantic_rebuild` form field and an optional `rebuild_backend` form field that
+  overrides `REBUILD_BACKEND` for that job. The Typst backend adds a compile-time PDF/UA-1
+  gate (`typst compile --pdf-standard ua-1`) plus a struct-tree assertion pass — verifying the
+  compiled tag tree round-trips the semantic AST — before the shared veraPDF acceptance gate.
 - Adobe PDF Services: `ADOBE_CLIENT_ID` / `ADOBE_CLIENT_SECRET`
 - WAVE: `WAVE_API_KEY`
 - Contrast: `CONTRAST_ENABLED`, `CONTRAST_LEVEL`, `CONTRAST_DPI`
