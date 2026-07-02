@@ -62,18 +62,11 @@ def test_pptx_legacy_rules(tmp_path):
     for rule_id in ("pptx-title", "pptx-language", "pptx-slide-titles", "pptx-alt-text"):
         assert _status(report, rule_id) == "Passed"
 
-    # Note: pptx-alt-text is deliberately not asserted here. python-pptx's
-    # Picture XML template (pptx/oxml/shapes/picture.py _pic_tmpl/_pic_ph_tmpl)
-    # always writes a non-empty descr="<image filename>" attribute on
-    # add_picture, regardless of whether make_pptx's picture_alt kwarg is set.
-    # So picture_alt=None does not actually produce a picture missing alt
-    # text under the current fixture + python-pptx combination, and
-    # office_acceptance._check_pptx's missing_alt check (which only looks at
-    # whether descr/title is non-empty) sees that default value as present.
     bad = make_pptx(tmp_path / "bad.pptx", slides=1, slide_titles=False, pictures=1, picture_alt=None)
     report = run_office_checker(bad, FileType.PPTX)
     assert _status(report, "pptx-title") == "Failed"
     assert _status(report, "pptx-language") == "Failed"
+    assert _status(report, "pptx-alt-text") == "Failed"
 
 
 def test_xlsx_legacy_rules(tmp_path):

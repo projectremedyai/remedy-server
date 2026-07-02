@@ -174,8 +174,15 @@ def make_pptx(
             slide.shapes.title.text = f"Slide {index + 1} Title"
         for _ in range(pictures):
             pic = slide.shapes.add_picture(BytesIO(TINY_PNG), Emu(0), Emu(0))
+            c_nv_pr = pic._element.nvPicPr.cNvPr
             if picture_alt is not None:
-                pic._element.nvPicPr.cNvPr.set("descr", picture_alt)
+                c_nv_pr.set("descr", picture_alt)
+            else:
+                # python-pptx's add_picture writes a non-empty default descr
+                # (e.g. the image filename); strip it so picture_alt=None
+                # actually yields no alt text.
+                c_nv_pr.attrib.pop("descr", None)
+                c_nv_pr.attrib.pop("title", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(path))
     return path
