@@ -61,6 +61,7 @@ dev = [
 
 [project.scripts]
 remedy-pdf = "project_remedy.cli_pdf:pdf_group"
+remedy-office = "project_remedy.cli_office:office_group"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/project_remedy", "backend"]
