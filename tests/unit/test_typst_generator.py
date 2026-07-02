@@ -172,3 +172,18 @@ def test_whitespace_alt_raises_at_generation_time(tmp_path):
     )
     with pytest.raises(GeneratorError, match="empty alt"):
         generate(request, asset_paths={"img-1": "img-1.png"})
+
+
+def test_lang_region_handles_bcp47_variants(tmp_path):
+    for language, expected_lang, expected_region in [
+        ("en-US", '"en"', '"US"'),
+        ("en", '"en"', None),
+        ("zh-Hans-CN", '"zh"', '"CN"'),
+        ("zh-Hans", '"zh"', None),
+    ]:
+        src = generate(make_request(asset_dir=tmp_path, content=[], assets={}, language=language), asset_paths={})
+        assert f"#set text(lang: {expected_lang})" in src
+        if expected_region:
+            assert f"#set text(region: {expected_region})" in src
+        else:
+            assert "region:" not in src

@@ -61,10 +61,17 @@ def _emit_runs(runs: list[Run]) -> str:
 
 def _lang_region(language: str) -> tuple[str, str | None]:
     """Split a BCP-47-ish tag ("en-US") into typst's separate lang/region
-    params — typst 0.15 rejects a combined tag in `lang:` (2/3-letter code only)."""
+    params — typst 0.15 rejects a combined tag in `lang:` (2/3-letter code only).
+
+    The primary subtag is always the lang. The region is taken from the LAST
+    hyphen-separated part only if it is exactly 2 ASCII letters (a real
+    region subtag) — otherwise (e.g. a 4-letter script subtag like "Hans")
+    no region is emitted. So "en-US" -> ("en", "US"), "zh-Hans-CN" ->
+    ("zh", "CN"), "zh-Hans" -> ("zh", None)."""
     parts = language.split("-")
     lang = parts[0]
-    region = parts[1] if len(parts) > 1 and parts[1] else None
+    last = parts[-1] if len(parts) > 1 else None
+    region = last if last and len(last) == 2 and last.isalpha() and last.isascii() else None
     return lang, region
 
 
