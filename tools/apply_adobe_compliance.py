@@ -10,10 +10,10 @@ pipeline leaves behind, without re-running any model.
 Examples
 --------
     # fix every PDF in the remediated corpus, in place
-    python tools/apply_adobe_compliance.py ~/Desktop/lamc_remediated/remediated_pdfs
+    python tools/apply_adobe_compliance.py ~/code/lamc_district_forms/lamc_remediated/remediated_pdfs
 
     # see what *would* change, without touching any file
-    python tools/apply_adobe_compliance.py ~/Desktop/lamc_remediated/remediated_pdfs --dry-run
+    python tools/apply_adobe_compliance.py ~/code/lamc_district_forms/lamc_remediated/remediated_pdfs --dry-run
 
     # one file
     python tools/apply_adobe_compliance.py path/to/doc.pdf

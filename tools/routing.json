@@ -1,0 +1,369 @@
+[
+  {
+    "file": "Biotechnology-Exhibition-Spring-2022.pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "High School Graduation Update Form.pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "NEW-LACCD-Unlawful-Discrimination-Complaint-Form.pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "Supplemental-Residency-Questionnaire-2018_2019-FILLABLE.pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "Supplemental_Residency_Questionnaire.pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "VERIFICATION OF ENROLLMENT FORM- (FILLABLE).pdf",
+    "clauses": "7.21.5-1",
+    "passes": [
+      "WIDTH"
+    ],
+    "tier": "DETERMINISTIC",
+    "notes": []
+  },
+  {
+    "file": "2020-Summer-Schedule-of-Classes-07-12-20.pdf",
+    "clauses": "7.21.4.1-2, 7.21.5-1, 7.21.7-2, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)",
+      "WIDTH"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font",
+      "ToUnicode fonts: Arial, Arial-ItalicMT, ArialMT"
+    ]
+  },
+  {
+    "file": "2020-Winter-Schedule-01-10-2020.pdf",
+    "clauses": "7.21.4.1-2, 7.21.5-1, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "WIDTH"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "2021-Summer-Schedule-06-25-21.pdf",
+    "clauses": "7.21.4.1-2, 7.21.5-1, 7.21.7-2, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)",
+      "WIDTH"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font",
+      "ToUnicode fonts: Arial, Arial-ItalicMT, ArialMT"
+    ]
+  },
+  {
+    "file": "2022-Winter-Schedule-of-Classes-01-04-22.pdf",
+    "clauses": "7.21.7-2, 7.21.8-1",
+    "passes": [
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "ToUnicode fonts: Arial, Arial-BoldMT"
+    ]
+  },
+  {
+    "file": "2023_winter_schedule_01.12.23.pdf",
+    "clauses": "7.21.7-2, 7.21.8-1",
+    "passes": [
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "ToUnicode fonts: Arial-ItalicMT, ArialMT"
+    ]
+  },
+  {
+    "file": "2024 Winter Schedule of Classes.pdf",
+    "clauses": "7.21.7-2, 7.21.8-1",
+    "passes": [
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "ToUnicode fonts: Arial-ItalicMT, ArialMT"
+    ]
+  },
+  {
+    "file": "2025 Winter Schedule.pdf",
+    "clauses": "7.21.7-2, 7.21.8-1",
+    "passes": [
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "ToUnicode fonts: Arial-ItalicMT, ArialMT"
+    ]
+  },
+  {
+    "file": "2026 Winter Schedule.pdf",
+    "clauses": "7.21.7-2, 7.21.8-1",
+    "passes": [
+      "NOTDEF",
+      "TOUNICODE:CMAP_INVERT|REPAIR(bad-values)"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "ToUnicode fonts: Arial-ItalicMT"
+    ]
+  },
+  {
+    "file": "Certificate-Mail-form-2.pdf",
+    "clauses": "7.21.4.1-2, 7.21.5-1, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "WIDTH"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "LA-Mission-CDC-Parent-Handbook-Revised-8-18.pdf",
+    "clauses": "7.21.4.1-1",
+    "passes": [
+      "EMBED"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "Mentorship-Prog-App.pdf",
+    "clauses": "7.21.8-1",
+    "passes": [
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": []
+  },
+  {
+    "file": "Nursing Grid.pdf",
+    "clauses": "7.21.4.1-1",
+    "passes": [
+      "EMBED"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "ParkingBrochure07.pdf",
+    "clauses": "7.21.8-1",
+    "passes": [
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": []
+  },
+  {
+    "file": "Summer 2013 (6.20).pdf",
+    "clauses": "7.21.8-1",
+    "passes": [
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": []
+  },
+  {
+    "file": "Summer2015(5-27-15).pdf",
+    "clauses": "7.21.4.1-2, 7.21.5-1, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "WIDTH"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "Winter2016schedule.pdf",
+    "clauses": "7.21.8-1",
+    "passes": [
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": []
+  },
+  {
+    "file": "getcoursefile (1).pdf",
+    "clauses": "7.21.4.1-1",
+    "passes": [
+      "EMBED"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "summer05_schedule.pdf",
+    "clauses": "7.21.4.1-2, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font"
+    ]
+  },
+  {
+    "file": "winte06_schedule.pdf",
+    "clauses": "7.21.8-1",
+    "passes": [
+      "NOTDEF"
+    ],
+    "tier": "SEMI-AUTO",
+    "notes": []
+  },
+  {
+    "file": "2022-LAMC-Institution-Set-Standards-Data.pdf",
+    "clauses": "7.21.7-1",
+    "passes": [
+      "TOUNICODE:REFFONT/AGL"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: GlyphLessFont"
+    ]
+  },
+  {
+    "file": "2023-2024-LAMC-Scholarship-Application.pdf",
+    "clauses": "7.21.4.1-1, 7.21.7-1",
+    "passes": [
+      "EMBED",
+      "TOUNICODE:OCR/symbol"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font",
+      "ToUnicode fonts: ZapfDingbats"
+    ]
+  },
+  {
+    "file": "238-Entry-Skills.pdf",
+    "clauses": "7.21.7-2",
+    "passes": [
+      "TOUNICODE:OCR/symbol|REPAIR(bad-values)"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: CMSY10, CMSY7"
+    ]
+  },
+  {
+    "file": "240entryskills.pdf",
+    "clauses": "7.21.7-2",
+    "passes": [
+      "TOUNICODE:OCR/symbol|REPAIR(bad-values)"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: CMSY10"
+    ]
+  },
+  {
+    "file": "Follow-Up Report ACCJC 05.13.14.pdf",
+    "clauses": "7.21.7-1",
+    "passes": [
+      "TOUNICODE:REFFONT/AGL"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: GlyphLessFont"
+    ]
+  },
+  {
+    "file": "Student-Contract.pdf",
+    "clauses": "7.21.4.1-1, 7.21.5-1, 7.21.7-1, 7.21.8-1",
+    "passes": [
+      "EMBED",
+      "NOTDEF",
+      "TOUNICODE:OCR/symbol",
+      "WIDTH"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "font(s) not embedded \u2192 embed named font",
+      "ToUnicode fonts: ZapfDingbats"
+    ]
+  },
+  {
+    "file": "math238entryskillsAnswers.pdf",
+    "clauses": "7.21.7-2",
+    "passes": [
+      "TOUNICODE:OCR/symbol|REPAIR(bad-values)"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: CMSY10"
+    ]
+  },
+  {
+    "file": "spring06_schedule.pdf",
+    "clauses": "7.21.7-1",
+    "passes": [
+      "TOUNICODE:REFFONT/AGL"
+    ],
+    "tier": "OCR-TAIL",
+    "notes": [
+      "ToUnicode fonts: GlyphLessFont"
+    ]
+  }
+]

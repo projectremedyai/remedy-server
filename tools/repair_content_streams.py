@@ -10,10 +10,10 @@ struct tree (PDF/UA-1 compliance preserved). Idempotent.
 Examples
 --------
     # fix every PDF in the remediated corpus, in place
-    python tools/repair_content_streams.py ~/Desktop/lamc_remediated/remediated_pdfs
+    python tools/repair_content_streams.py ~/code/lamc_district_forms/lamc_remediated/remediated_pdfs
 
     # see how many files / ops would change, without writing
-    python tools/repair_content_streams.py ~/Desktop/lamc_remediated/remediated_pdfs --dry-run
+    python tools/repair_content_streams.py ~/code/lamc_district_forms/lamc_remediated/remediated_pdfs --dry-run
 """
 
 from __future__ import annotations

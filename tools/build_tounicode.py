@@ -6,17 +6,33 @@ glyph is only mapped when we can prove its Unicode:
   * Tesseract 'GlyphLessFont'      -> content code == Unicode (identity)
   * Type0 CIDFontType2 (Identity-H) with a Unicode cmap in the program -> invert cmap
   * simple TrueType/Type1          -> /Encoding name -> AGL, or base-encoding codec
+  * simple Type1 with embedded /FontFile -> the program's OWN built-in Encoding
+    (t1Lib) -> glyph names -> AGL. This is what clears the Computer Modern math
+    tail: the subsetter wrote U+0000 for 'minus' etc., but the embedded program
+    still names its glyphs (minus, approxequal, radical, period, fi, ...) and AGL
+    resolves those authoritatively. Verified: also fixes latent wrong-but-valid
+    maps (period->colon, comma->semicolon, radical->'p') the producer emitted.
 Glyphs it cannot prove are left unmapped (so veraPDF still fails them -> the file
 is routed onward, never silently mismapped). Content-stream codes are untouched.
 
-Usage: build_tounicode.py in.pdf out.pdf
+Existing /ToUnicode maps are only rewritten when (a) the font is named in
+--targets, or (b) the map provably contains bad values (0 / U+FEFF / U+FFFE —
+the 7.21.7-2 trigger). Rewrites MERGE: trusted entries override, existing valid
+entries for codes we cannot prove are kept, existing BAD entries with no trusted
+replacement are dropped (never re-emitted).
+
+Usage: build_tounicode.py in.pdf out.pdf [targets]
 """
-import sys, io, os
+import sys, io, os, re, tempfile
 import pikepdf
 from fontTools.ttLib import TTFont
-from fontTools import agl
+from fontTools import agl, t1Lib
 
-BAD = {0x0, 0xFEFF, 0xFFFE}
+# 0/FEFF/FFFE are veraPDF 7.21.7-2 failures; U+FFFD (REPLACEMENT CHARACTER) is
+# veraPDF-legal but semantically a declared-unknown mapping -- equally garbage
+# for screen readers, so we treat it as bad: never write it, and repair maps
+# containing it when a trusted source exists.
+BAD = {0x0, 0xFEFF, 0xFFFE, 0xFFFD}
 def _ok(u): return u is not None and u not in BAD and not (0xD800 <= u <= 0xDFFF)
 
 def _cmap_stream(mapping, twobyte):
@@ -80,13 +96,73 @@ def _cid_to_gid(cidfont):
     b = bytes(m.read_bytes())
     return lambda cid: ((b[cid*2] << 8) | b[cid*2+1]) if cid*2+1 < len(b) else 0
 
+def _type1_builtin_names(fd):
+    """Embedded Type1 program -> {code:int -> glyphname} from its OWN built-in
+    Encoding array (t1Lib). The program is the trusted source: its CharStrings
+    names are authoritative for what each glyph IS. Returns {} if unparseable."""
+    if "/FontFile" not in fd:
+        return {}, False
+    try:
+        ff = fd["/FontFile"]
+        raw = bytes(ff.read_bytes())
+        l1 = int(ff.get("/Length1", 0)); l2 = int(ff.get("/Length2", 0))
+        l3 = int(ff.get("/Length3", 0))
+        seg1, seg2 = raw[:l1], raw[l1:l1+l2]
+        seg3 = raw[l1+l2:l1+l2+l3] if l3 else raw[l1+l2:]
+        def hdr(t, n): return bytes([0x80, t]) + n.to_bytes(4, "little")
+        pfb = hdr(1, len(seg1)) + seg1 + hdr(2, len(seg2)) + seg2 + \
+              hdr(1, len(seg3)) + seg3 + bytes([0x80, 3])
+        with tempfile.NamedTemporaryFile(suffix=".pfb", delete=False) as tf:
+            tf.write(pfb); tmp = tf.name
+        try:
+            font = t1Lib.T1Font(tmp); font.parse()
+        finally:
+            try: os.unlink(tmp)
+            except OSError: pass
+        enc = font.font.get("Encoding")
+        fname = str(font.font.get("FontName", ""))
+        zapf = "zapfdingbats" in fname.lower().replace("+", "")
+        if not isinstance(enc, list):
+            return {}, zapf
+        return {c: n for c, n in enumerate(enc) if n and n != ".notdef"}, zapf
+    except Exception:
+        return {}, False
+
+def _existing_map(obj):
+    """Parse the font's current /ToUnicode -> {code:int -> unistr}. Light regex
+    parser (bfchar + simple bfrange); enough to detect bad values and to merge."""
+    if "/ToUnicode" not in obj:
+        return None
+    try:
+        text = bytes(obj["/ToUnicode"].read_bytes()).decode("latin-1", "replace")
+    except Exception:
+        return None
+    out = {}
+    for m in re.finditer(r"beginbfchar(.*?)endbfchar", text, re.S):
+        for src, dst in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>", m.group(1)):
+            dstb = bytes.fromhex(dst if len(dst) % 2 == 0 else "0" + dst)
+            out[int(src, 16)] = dstb.decode("utf-16-be", "replace")
+    for m in re.finditer(r"beginbfrange(.*?)endbfrange", text, re.S):
+        for lo, hi, start in re.findall(
+                r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", m.group(1)):
+            base = int.from_bytes(bytes.fromhex(start if len(start) % 2 == 0 else "0"+start), "big")
+            for i, code in enumerate(range(int(lo, 16), int(hi, 16) + 1)):
+                try: out[code] = chr(base + i)
+                except ValueError: out[code] = ""
+    return out
+
+def _has_bad_values(mapping):
+    """True if any mapped value is empty or contains 0 / U+FEFF / U+FFFE (7.21.7-2)."""
+    return any((not u) or any(ord(ch) in BAD for ch in u) for u in mapping.values())
+
 def _simple_map(obj, fd):
-    """simple TrueType/Type1 -> {code:int -> unistr} via /Encoding names -> AGL / codec."""
+    """simple TrueType/Type1 -> {code:int -> unistr}.
+    Per-code precedence follows the PDF spec: /Differences name > explicit
+    /BaseEncoding codec > the embedded Type1 program's built-in Encoding.
+    Never default-guesses a codec: with no trusted source a code stays unmapped."""
     enc = obj.get("/Encoding")
     base = enc if isinstance(enc, pikepdf.Name) else (
            enc.get("/BaseEncoding") if isinstance(enc, pikepdf.Dictionary) else None)
-    # Only trust an EXPLICIT standard base encoding. Never default-guess (cp1252),
-    # or a custom builtin encoding (e.g. Computer Modern) yields wrong control chars.
     codec = {"/WinAnsiEncoding": "cp1252", "/MacRomanEncoding": "mac_roman"}.get(str(base) if base else "")
     diffs = {}
     if isinstance(enc, pikepdf.Dictionary) and "/Differences" in enc:
@@ -94,18 +170,27 @@ def _simple_map(obj, fd):
         for it in enc["/Differences"]:
             if isinstance(it, int): cur = it
             else: diffs[cur] = str(it).lstrip("/"); cur += 1
-    if not diffs and not codec:
+    builtin, zapf = ({}, False)
+    if obj.get("/Subtype") == pikepdf.Name("/Type1"):
+        builtin, zapf = _type1_builtin_names(fd)
+    # the PDF-level font name also identifies ZapfDingbats (an embedded clone
+    # like D050000L keeps aNN glyph names but not the ZapfDingbats FontName)
+    if "zapfdingbats" in str(obj.get("/BaseFont", "")).lower():
+        zapf = True
+    if not diffs and not codec and not builtin:
         return {}                                    # no trusted source -> map nothing
-    out = {}
     lo = int(obj.get("/FirstChar", 0)); hi = int(obj.get("/LastChar", 255))
-    for code in range(lo, hi + 1):
+    codes = set(range(lo, hi + 1)) | set(diffs) | set(builtin)
+    out = {}
+    for code in sorted(codes):
         u = None
         if code in diffs:
-            t = agl.toUnicode(diffs[code])           # glyph name -> Unicode (AGL only)
-            u = t if t else None
-        elif codec:
+            u = agl.toUnicode(diffs[code], isZapfDingbats=zapf) or None
+        elif codec and 0 <= code <= 255:
             try: u = bytes([code]).decode(codec)
             except Exception: u = None
+        elif code in builtin:
+            u = agl.toUnicode(builtin[code], isZapfDingbats=zapf) or None
         if u and all(_ok(ord(ch)) for ch in u):
             out[code] = u
     return out
@@ -123,18 +208,38 @@ def build(inp, outp, targets=None):
         base = str(obj.get("/BaseFont", ""))
         sub = obj.get("/Subtype")
         is_gl = "GlyphLess" in base
+        existing = _existing_map(obj)                # None if no /ToUnicode
+        pre_mapping = None                           # trusted map computed during selection
         # Selection (non-destructive by default):
         #  * with --targets: only the named fonts (+ GlyphLess repair)
-        #  * without targets: only fonts MISSING /ToUnicode, plus GlyphLess repair.
-        #    Overwriting an existing /ToUnicode (e.g. 7.21.7-2 repair) is opt-in via targets.
+        #  * without targets: fonts MISSING /ToUnicode, fonts whose existing map
+        #    provably contains bad values (0/FEFF/FFFE — the 7.21.7-2 trigger),
+        #    fonts whose embedded Type1 program's OWN glyph names CONTRADICT the
+        #    existing map (proven-wrong Unicode, e.g. CM period mapped to colon),
+        #    and the GlyphLess repair. Otherwise valid maps are never touched.
         if targets:
             if not (is_gl or any(t in base for t in targets)):
                 continue
         else:
-            if "/ToUnicode" in obj and not is_gl:
-                continue
-        mapping = None; twobyte = (sub == pikepdf.Name("/Type0"))
-        if "GlyphLess" in base:                      # Tesseract identity
+            if existing is not None and not is_gl and not _has_bad_values(existing):
+                # Contradiction probe: only simple Type1 with an embedded program.
+                if sub != pikepdf.Name("/Type1"):
+                    continue
+                fd0 = obj.get("/FontDescriptor")
+                if fd0 is None or "/FontFile" not in fd0:
+                    continue
+                trusted = _simple_map(obj, fd0)
+                # single-char vs single-char mismatch = the existing map calls the
+                # glyph a different character than the font itself names it.
+                # (multi-char conventions like fi -> "fi" are NOT contradictions)
+                if not any(c in existing and len(existing[c]) == 1 and len(u) == 1
+                           and existing[c] != u for c, u in trusted.items()):
+                    continue
+                pre_mapping = trusted                # proven wrong -> rewrite below
+        mapping = pre_mapping; twobyte = (sub == pikepdf.Name("/Type0"))
+        if mapping is not None:
+            pass                                     # trusted map from selection probe
+        elif "GlyphLess" in base:                    # Tesseract identity
             if gl_codes is None: gl_codes = _glyphless_codes(inp)
             mapping = {c: chr(c) for c in gl_codes if _ok(c)}
         elif sub == pikepdf.Name("/Type0"):          # cmap inversion
@@ -156,6 +261,15 @@ def build(inp, outp, targets=None):
                 mapping = _simple_map(obj, fd)
         if not mapping:
             continue
+        if existing:
+            # MERGE: trusted entries override; existing VALID entries for codes we
+            # cannot prove are kept; existing BAD entries with no trusted
+            # replacement are dropped (leaving the glyph unmapped, never garbage).
+            keep = {c: u for c, u in existing.items()
+                    if u and all(_ok(ord(ch)) for ch in u)}
+            mapping = {**keep, **mapping}
+            if mapping == keep == existing:          # nothing to improve
+                continue
         data = _cmap_stream(mapping, twobyte)
         if not data:
             continue

@@ -75,6 +75,12 @@ def fix(inp, outp):
         except Exception:
             continue
         sub = obj.get("/Subtype")
+        # Tesseract's GlyphLessFont: /W carries per-OCR-box advances that are
+        # inconsistent with the 1-glyph program BY DESIGN (veraPDF does not
+        # flag it). "Fixing" them to the program advance collapses the
+        # invisible text layer's geometry -> extracted words merge. Skip.
+        if "glyphless" in str(obj.get("/BaseFont", "")).lower():
+            continue
         # ---- Type0 -> descendant CIDFontType2/0 with /W ----
         if sub == pikepdf.Name("/Type0"):
             for cidfont in (obj.get("/DescendantFonts") or []):

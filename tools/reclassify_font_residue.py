@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import pikepdf
 from fontTools.ttLib import TTFont
 
-PDIR = os.path.expanduser("~/Desktop/lamc_remediated/remediated_pdfs")
+PDIR = os.path.expanduser("~/code/lamc_district_forms/lamc_remediated/remediated_pdfs")
 
 # (filename, clauses-per-handoff-appendix) — clauses only used as a cross-check
 TARGETS = [
