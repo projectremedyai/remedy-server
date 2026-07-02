@@ -118,24 +118,46 @@ def _emit_table(block: SimpleTableBlock) -> str:
     rows = list(block.rows)
     first = rows[0]
     if first.cells and all(c.header in ("col", "both") for c in first.cells):
-        header_cells = ", ".join(cell(c) for c in first.cells)
-        lines.append(f"  table.header({header_cells}),")
+        header_cells = [cell(c) for c in first.cells]
+        header_cells += ["[]"] * (columns - len(header_cells))  # pad: Typst fills the grid as a cell stream
+        lines.append(f"  table.header({', '.join(header_cells)}),")
         rows = rows[1:]
     for row in rows:
         # 'row'/'both' header cells outside a full header row degrade to plain
         # cells: Typst 0.15's row-header construct is behind an unstable flag
         # (docs/typst_backend_decisions.md).
-        lines.append("  " + ", ".join(cell(c) for c in row.cells) + ",")
+        cells = [cell(c) for c in row.cells]
+        cells += ["[]"] * (columns - len(cells))  # pad: Typst fills the grid as a cell stream
+        lines.append("  " + ", ".join(cells) + ",")
     lines.append(")")
     return "\n".join(lines)
 
 
-def _emit_figure(block, asset_paths):  # implemented in Task 5
-    raise GeneratorError("figure emission not yet implemented")
+def _asset_path(asset_ref: str, asset_paths: dict[str, str]) -> str:
+    try:
+        return asset_paths[asset_ref]
+    except KeyError as exc:
+        raise GeneratorError(f"no asset path provided for asset_ref {asset_ref!r}") from exc
 
 
-def _emit_artifact(block, asset_paths):  # implemented in Task 5
-    raise GeneratorError("artifact emission not yet implemented")
+def _emit_figure(block: FigureBlock, asset_paths: dict[str, str]) -> str:
+    alt = (block.alt or "").strip()
+    if not alt:
+        # Defense-in-depth: Pydantic min_length=1 should make this unreachable
+        # (FR-8) — fail loudly, never substitute a placeholder.
+        raise GeneratorError(f"FigureBlock {block.asset_ref!r} reached the generator with empty alt")
+    path = _asset_path(block.asset_ref, asset_paths)
+    image = f'image("{escape_string(path)}", alt: "{escape_string(alt)}")'
+    if block.caption:
+        return f"#figure({image}, caption: [{_emit_runs(block.caption)}])"
+    return f"#{image}"
+
+
+def _emit_artifact(block: ArtifactBlock, asset_paths: dict[str, str]) -> str:
+    """Decorative image: /Artifact marked-content, zero struct-tree entries
+    (spike-verified). Never an alt-less Figure — that hard-fails ua-1."""
+    path = _asset_path(block.asset_ref, asset_paths)
+    return f'#pdf.artifact[#image("{escape_string(path)}")]'
 
 
 def _emit_block(block, asset_paths: dict[str, str]) -> str:

@@ -7,6 +7,9 @@ from __future__ import annotations
 import pytest
 
 from project_remedy.rebuild.ast import (
+    ArtifactBlock,
+    AssetRef,
+    FigureBlock,
     HeadingBlock,
     ListBlock,
     ListItem,
@@ -16,7 +19,7 @@ from project_remedy.rebuild.ast import (
     TableCell,
     TableRow,
 )
-from project_remedy.rebuild.typst_generator import escape_markup, escape_string, generate
+from project_remedy.rebuild.typst_generator import GeneratorError, escape_markup, escape_string, generate
 from tests.unit.rebuild_fixtures import make_request
 
 
@@ -109,3 +112,50 @@ def test_table_cell_text_is_escaped(tmp_path):
     request = make_request(asset_dir=tmp_path, content=[block], assets={})
     src = generate(request, asset_paths={})
     assert "[a\\#b], [c\\[d\\]]" in src
+
+
+def _fig_request(tmp_path, block):
+    return make_request(
+        asset_dir=tmp_path,
+        content=[block],
+        assets={"img-1": AssetRef(path=str(tmp_path / "img-1.png"), mime="image/png")},
+    )
+
+
+def test_figure_with_caption_and_alt(tmp_path):
+    block = FigureBlock(asset_ref="img-1", alt='A "quoted" dot', caption=[Run(text="Cap")])
+    src = generate(_fig_request(tmp_path, block), asset_paths={"img-1": "img-1.png"})
+    assert '#figure(image("img-1.png", alt: "A \\"quoted\\" dot"), caption: [Cap])' in src
+
+
+def test_figure_without_caption_is_bare_image(tmp_path):
+    block = FigureBlock(asset_ref="img-1", alt="Bare")
+    src = generate(_fig_request(tmp_path, block), asset_paths={"img-1": "img-1.png"})
+    assert '#image("img-1.png", alt: "Bare")' in src
+    assert "#figure(" not in src
+
+
+def test_artifact_wraps_in_pdf_artifact(tmp_path):
+    block = ArtifactBlock(asset_ref="img-1")
+    src = generate(_fig_request(tmp_path, block), asset_paths={"img-1": "img-1.png"})
+    assert '#pdf.artifact[#image("img-1.png")]' in src
+    assert "alt:" not in src
+
+
+def test_missing_asset_path_raises(tmp_path):
+    block = FigureBlock(asset_ref="img-1", alt="x")
+    with pytest.raises(GeneratorError, match="img-1"):
+        generate(_fig_request(tmp_path, block), asset_paths={})
+
+
+def test_ragged_table_rows_are_padded(tmp_path):
+    block = SimpleTableBlock(
+        rows=[
+            TableRow(cells=[TableCell(text="A"), TableCell(text="B"), TableCell(text="C")]),
+            TableRow(cells=[TableCell(text="only-one")]),
+        ]
+    )
+    request = make_request(asset_dir=tmp_path, content=[block], assets={})
+    src = generate(request, asset_paths={})
+    assert "columns: 3" in src
+    assert "[only-one], [], []," in src  # short row padded — no cell-stream shift
