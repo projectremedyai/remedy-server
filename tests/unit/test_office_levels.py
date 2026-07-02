@@ -148,3 +148,51 @@ def test_end_to_end_classification(tmp_path):
     result = classify_level(acceptance, probe_office_structure(path, FileType.DOCX))
     assert result.level == "L2"
     assert "docx-alt-text" in result.blocking_conditions
+
+
+# --- Branch-coverage gap closers (AC1) --------------------------------------
+
+import pytest
+
+
+def test_probe_rejects_non_docx():
+    with pytest.raises(ValueError, match="DOCX only"):
+        probe_office_structure(Path("x.pptx"), FileType.PPTX)
+
+
+def test_probe_counts_missing_alt_and_non_heading_styled_paragraph(tmp_path):
+    path = make_docx(
+        tmp_path / "probe_mix.docx",
+        inline_images=1,
+        image_alt=None,
+        real_list_items=["item"],
+    )
+    probe = probe_office_structure(path, FileType.DOCX)
+    assert probe.image_count == 1
+    assert probe.has_alt_text_signal is False
+
+
+def test_probe_skips_drawing_container_without_docpr(tmp_path):
+    """A wp:inline with no docPr child at all (malformed but well-formed XML)
+    must not be counted as an image — exercises the `doc_pr is None: continue`
+    branch in probe_office_structure's image-scan loop.
+    """
+    import re
+    import shutil
+    import zipfile
+
+    path = make_docx(tmp_path / "probe_nodocpr.docx", inline_images=1, image_alt="alt text")
+    tmp = path.with_suffix(".tmp.docx")
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = data.decode("utf-8")
+                text = re.sub(r"<wp:docPr\b[^>]*/>", "", text, count=1)
+                data = text.encode("utf-8")
+            dst.writestr(item, data)
+    shutil.move(str(tmp), str(path))
+
+    probe = probe_office_structure(path, FileType.DOCX)
+    assert probe.image_count == 0
+    assert probe.has_alt_text_signal is False

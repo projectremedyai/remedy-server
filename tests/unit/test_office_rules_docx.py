@@ -199,3 +199,91 @@ def test_rule_7_1_color_only_meaning(tmp_path):
     result = _run("OOXML-DOCX-7.1", bad)
     assert result.status == "Manual Check Needed"               # color + phrase → flag, not fail
     assert _run("OOXML-DOCX-7.1", plain).status == "Passed"     # phrase without colored run
+
+
+# --- Branch-coverage gap closers (AC1) --------------------------------------
+
+import re
+import shutil
+import zipfile
+
+import pytest
+
+
+def _strip_first_docpr(path: Path) -> None:
+    """Raw XML surgery: delete the first self-closing ``<wp:docPr .../>`` from
+    word/document.xml, leaving a drawing container (wp:inline/wp:anchor) with
+    no docPr child. Malformed per the OOXML schema but still well-formed XML
+    and still readable by python-docx/ElementTree — exactly what's needed to
+    exercise the "container found but no docPr" branch.
+    """
+    tmp = path.with_suffix(".tmp.docx")
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = data.decode("utf-8")
+                text = re.sub(r"<wp:docPr\b[^>]*/>", "", text, count=1)
+                data = text.encode("utf-8")
+            dst.writestr(item, data)
+    shutil.move(str(tmp), str(path))
+
+
+def test_rule_4_1_and_4_2_vacuous_pass_on_rowless_table(tmp_path):
+    """A <w:tbl> with zero <w:tr> rows (python-docx add_table(rows=0, ...))
+    exercises the `first_tr is None: continue` branch in both table rules —
+    they must pass vacuously rather than raise or misreport.
+    """
+    from docx import Document
+
+    path = tmp_path / "rowless.docx"
+    doc = Document()
+    table = doc.add_table(rows=0, cols=2)
+    doc.save(str(path))
+
+    # Sanity: confirm the fixture really has no w:tr (guards against a future
+    # python-docx version changing add_table's zero-row behavior).
+    with zipfile.ZipFile(path) as zf:
+        xml = zf.read("word/document.xml").decode("utf-8")
+    tbl_start = xml.find("<w:tbl>")
+    tbl_end = xml.find("</w:tbl>")
+    assert "<w:tr" not in xml[tbl_start:tbl_end]
+
+    assert _run("OOXML-DOCX-4.1", path).status == "Passed"
+    assert _run("OOXML-DOCX-4.2", path).status == "Passed"
+
+
+def test_rule_5_1_bullet_looking_text_with_real_numpr_not_flagged(tmp_path):
+    path = make_docx(tmp_path / "real_dash_list.docx", real_list_items=["- dash item"])
+    result = _run("OOXML-DOCX-5.1", path)
+    assert result.status == "Passed"
+
+
+def test_rule_6_1_empty_hyperlink_display_is_skipped(tmp_path):
+    path = make_docx(tmp_path / "empty_link.docx", hyperlinks=[("", "https://example.com")])
+    result = _run("OOXML-DOCX-6.1", path)
+    assert result.status == "Passed"
+
+
+def test_rule_3_1_drawing_without_docpr_is_vacuous(tmp_path):
+    path = make_docx(tmp_path / "nodocpr.docx", inline_images=1, image_alt="alt text")
+    _strip_first_docpr(path)
+    result = _run("OOXML-DOCX-3.1", path)
+    assert result.status == "Passed"
+
+
+def test_run_all_delegates_non_docx(tmp_path):
+    from project_remedy.models import FileType
+    from project_remedy.office_checker import OfficeAccessibilityChecker
+    from tests.unit.office_fixtures import make_pptx, make_xlsx
+
+    pptx = make_pptx(tmp_path / "d.pptx", title="T")
+    report = OfficeAccessibilityChecker(pptx).run_all()
+    assert report.file_type == FileType.PPTX and report.results
+
+    xlsx = make_xlsx(tmp_path / "b.xlsx", title="T")
+    report = OfficeAccessibilityChecker(xlsx).run_all()
+    assert report.file_type == FileType.XLSX and report.results
+
+    with pytest.raises(ValueError, match="Unsupported Office checker type"):
+        OfficeAccessibilityChecker(tmp_path / "x.doc", FileType.DOC).run_all()
