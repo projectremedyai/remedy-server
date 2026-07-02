@@ -45,3 +45,31 @@ def test_new_rules_without_remediator_support_ship_fixable_false():
 
 def test_namespace_map_covers_wordprocessing_drawing():
     assert set(NS) >= {"w", "wp", "a", "r"}
+
+
+from pathlib import Path
+
+from project_remedy.office_checker import DOCX_RULES, DocxContext
+from tests.unit.office_fixtures import make_docx
+
+
+def _run(rule_id: str, path: Path):
+    return DOCX_RULES[rule_id](DocxContext.load(path))
+
+
+def test_rule_1_1_title(tmp_path):
+    good = make_docx(tmp_path / "g.docx", title="Has Title")
+    bad = make_docx(tmp_path / "b.docx", title="")
+    ok = _run("OOXML-DOCX-1.1", good)
+    fail = _run("OOXML-DOCX-1.1", bad)
+    assert ok.status == "Passed" and ok.rule_id == "docx-title"
+    assert fail.status == "Failed" and fail.fixable is True
+    assert fail.checkpoint == "Document metadata" and fail.wcag_ref == "2.4.2"
+
+
+def test_rule_1_2_language(tmp_path):
+    good = make_docx(tmp_path / "g.docx", language="en-US")
+    bad = make_docx(tmp_path / "b.docx", language="")
+    assert _run("OOXML-DOCX-1.2", good).status == "Passed"
+    result = _run("OOXML-DOCX-1.2", bad)
+    assert result.status == "Failed" and result.rule_id == "docx-language"
