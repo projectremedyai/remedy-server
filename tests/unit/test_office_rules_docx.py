@@ -109,4 +109,21 @@ def test_rule_2_3_no_orphan_intro_text(tmp_path):
     assert _run("OOXML-DOCX-2.3", good).status == "Passed"
     result = _run("OOXML-DOCX-2.3", bad)
     assert result.status == "Failed" and result.details
+    assert any("Intro before any heading." in d for d in result.details)
     assert _run("OOXML-DOCX-2.3", empty).status == "Passed"  # vacuous: nothing to mislead
+
+
+def test_rule_2_1_outline_level_counts_as_heading(tmp_path):
+    path = make_docx(tmp_path / "o.docx", outline_paragraphs=[("Outline heading", 0)])
+    assert _run("OOXML-DOCX-2.1", path).status == "Passed"
+
+
+def test_rule_2_2_outline_level_maps_to_level_plus_one(tmp_path):
+    # outlineLvl 0 -> level 1: no skip
+    ok = make_docx(tmp_path / "ok.docx", outline_paragraphs=[("Top", 0), ("Sub", 1)])
+    assert _run("OOXML-DOCX-2.2", ok).status == "Passed"
+    # outlineLvl 0 then 2 -> levels 1 then 3: skip
+    skip = make_docx(tmp_path / "skip.docx", outline_paragraphs=[("Top", 0), ("Deep", 2)])
+    result = _run("OOXML-DOCX-2.2", skip)
+    assert result.status == "Failed"
+    assert any("1 -> 3" in d for d in result.details)

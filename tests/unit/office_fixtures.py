@@ -30,6 +30,7 @@ def make_docx(
     title: str = "",
     language: str = "",
     headings: Sequence[tuple[str, int]] = (),
+    outline_paragraphs: Sequence[tuple[str, int]] = (),
     body_paragraphs: Sequence[str] = (),
     body_first: bool = False,
     tables: int = 0,
@@ -46,10 +47,13 @@ def make_docx(
     """Build a .docx exercising exactly the features the caller asks for.
 
     ``headings`` is a list of ``(text, level)``; level 0 applies the Title
-    style, level N >= 1 applies "Heading N". ``body_first`` puts one body
-    paragraph before the first heading (for OOXML-DOCX-2.3 Fail fixtures).
-    ``anchored_images=True`` converts every image to a floating ``wp:anchor``.
-    ``image_alt=None`` leaves images with no descr/title.
+    style, level N >= 1 applies "Heading N". ``outline_paragraphs`` is a list
+    of ``(text, outline_val)``; each adds a Normal-styled paragraph (no
+    heading style) carrying an explicit ``w:outlineLvl`` element, so the
+    paragraph is only structurally a heading via outline level. ``body_first``
+    puts one body paragraph before the first heading (for OOXML-DOCX-2.3 Fail
+    fixtures). ``anchored_images=True`` converts every image to a floating
+    ``wp:anchor``. ``image_alt=None`` leaves images with no descr/title.
     """
     from docx import Document
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -71,6 +75,13 @@ def make_docx(
     for text, level in headings:
         style = "Title" if level == 0 else f"Heading {level}"
         doc.add_paragraph(text, style=style)
+
+    for text, outline_val in outline_paragraphs:
+        para = doc.add_paragraph(text)  # default Normal style, no heading style
+        p_pr = para._p.get_or_add_pPr()
+        outline = OxmlElement("w:outlineLvl")
+        outline.set(qn("w:val"), str(outline_val))
+        p_pr.append(outline)
 
     for text in body_iter:
         doc.add_paragraph(text)
