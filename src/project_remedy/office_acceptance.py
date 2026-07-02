@@ -142,6 +142,20 @@ class OfficeAcceptanceResult:
         return "; ".join(self.warning_reasons)
 
 
+def summarize_office_acceptance(result: OfficeAcceptanceResult) -> dict[str, Any]:
+    """JSON-safe acceptance summary for job metadata / API responses (FR5)."""
+    return {
+        "passed": result.passed,
+        "summary": result.summary(),
+        "failed_rule_ids": [r.rule_id for r in result.checker_failures],
+        "manual_check_rule_ids": [
+            r.rule_id for r in result.checker_report.results if r.status == "Manual Check Needed"
+        ],
+        "screen_reader_error_count": len(result.screen_reader_errors),
+        "package_valid": result.package_result.passed,
+    }
+
+
 def evaluate_office_acceptance(
     file_path: Path,
     *,
