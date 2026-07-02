@@ -3,6 +3,7 @@ typst is not installed; the negative alt-text test is AC #4 of the PRD."""
 
 from __future__ import annotations
 
+import pathlib
 import shutil
 
 import pytest
@@ -12,6 +13,7 @@ from project_remedy.rebuild.typst_renderer import (
     TypstNotAvailable,
     TypstRenderer,
     TypstTimeout,
+    TypstUnsupportedConstruct,
     resolve_typst_binary,
 )
 from tests.unit.rebuild_fixtures import make_request
@@ -51,3 +53,31 @@ async def test_timeout_raises(tmp_path):
     renderer = TypstRenderer(binary_path=resolve_typst_binary(), timeout_s=0.0001)
     with pytest.raises(TypstTimeout):
         await renderer.render(make_request(asset_dir=tmp_path))
+
+
+async def test_whitespace_alt_becomes_unsupported_construct(tmp_path):
+    """Whitespace-only alt passes Pydantic (min_length=1) but the generator
+    refuses it; that GeneratorError must surface as TypstUnsupportedConstruct,
+    not leak out untranslated. Fires before any subprocess call, so this runs
+    with or without typst installed."""
+    from project_remedy.rebuild.ast import AssetRef, FigureBlock
+
+    request = make_request(
+        asset_dir=tmp_path,
+        content=[FigureBlock(asset_ref="img-1", alt=" ")],
+        assets={"img-1": AssetRef(path=str(tmp_path / "img-1.png"), mime="image/png")},
+    )
+    renderer = TypstRenderer(binary_path=resolve_typst_binary() or pathlib.Path("/usr/bin/true"))
+    with pytest.raises(TypstUnsupportedConstruct):
+        await renderer.render(request)
+
+
+async def test_zero_row_table_becomes_unsupported_construct(tmp_path):
+    """Zero-row table passes Pydantic (no min_length on rows) but the
+    generator refuses it; same translation as above."""
+    from project_remedy.rebuild.ast import SimpleTableBlock
+
+    request = make_request(asset_dir=tmp_path, content=[SimpleTableBlock(rows=[])], assets={})
+    renderer = TypstRenderer(binary_path=resolve_typst_binary() or pathlib.Path("/usr/bin/true"))
+    with pytest.raises(TypstUnsupportedConstruct):
+        await renderer.render(request)

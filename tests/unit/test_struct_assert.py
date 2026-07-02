@@ -6,7 +6,7 @@ import shutil
 
 import pytest
 
-from project_remedy.rebuild.ast import FigureBlock, HeadingBlock, Run
+from project_remedy.rebuild.ast import FigureBlock, HeadingBlock, ListBlock, ListItem, ParagraphBlock, Run
 from project_remedy.rebuild.struct_assert import StructAssertReport, verify
 from project_remedy.rebuild.typst_renderer import TypstRenderer, resolve_typst_binary
 from tests.unit.rebuild_fixtures import make_request
@@ -56,6 +56,37 @@ async def test_alt_text_byte_exact(tmp_path):
     report = verify(wrong, pdf)
     assert not report.passed
     assert any("Alt" in m for m in report.mismatches)
+
+
+@needs_typst
+async def test_nested_list_round_trips(tmp_path):
+    """A list item whose body contains a paragraph AND a nested list must
+    round-trip cleanly — exercises the nested-ListBlock recursion in
+    _expected end-to-end (previously only asserted by code inspection)."""
+    nested = ListBlock(
+        ordered=False,
+        items=[
+            ListItem(
+                label_runs=[Run(text="•")],
+                body=[
+                    ParagraphBlock(runs=[Run(text="Outer item text")]),
+                    ListBlock(
+                        ordered=False,
+                        items=[
+                            ListItem(
+                                label_runs=[Run(text="•")],
+                                body=[ParagraphBlock(runs=[Run(text="Inner item text")])],
+                            )
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+    request = make_request(asset_dir=tmp_path, content=[nested], assets={})
+    pdf = await TypstRenderer(binary_path=resolve_typst_binary()).render(request)
+    report = verify(request, pdf)
+    assert report.passed, report.mismatches
 
 
 def test_verify_handles_untagged_pdf(tmp_path):

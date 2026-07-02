@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass
 
 from project_remedy.rebuild.ast import RebuildRequest
-from project_remedy.rebuild.typst_generator import generate
+from project_remedy.rebuild.typst_generator import GeneratorError, generate
 
 
 class TypstError(RuntimeError):
@@ -60,7 +60,10 @@ class TypstRenderer:
                 filename = f"{ref}{_EXT_BY_MIME[asset.mime]}"
                 shutil.copyfile(asset.path, tmpdir / filename)
                 asset_paths[ref] = filename
-            source = generate(request, asset_paths=asset_paths)
+            try:
+                source = generate(request, asset_paths=asset_paths)
+            except GeneratorError as exc:
+                raise TypstUnsupportedConstruct(str(exc)) from exc
             (tmpdir / "main.typ").write_text(source, encoding="utf-8")
             return await self._compile(tmpdir)
 
