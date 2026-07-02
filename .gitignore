@@ -94,9 +94,6 @@ scripts/laccd_smoke_batch.py
 
 # Clean seed repo exclusions
 *.md
-# Handoff docs are local-only by default (subsumed by *.md above; stated
-# explicitly for intent). Force-add a specific one to track it: git add -f.
-HANDOFF_*.md
 !src/project_remedy/behavioral_proxies/**/prompts/
 !src/project_remedy/behavioral_proxies/**/prompts/*.md
 !src/project_remedy/quality_judges/**/prompts/
