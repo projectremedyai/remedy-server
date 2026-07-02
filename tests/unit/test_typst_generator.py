@@ -159,3 +159,16 @@ def test_ragged_table_rows_are_padded(tmp_path):
     src = generate(request, asset_paths={})
     assert "columns: 3" in src
     assert "[only-one], [], []," in src  # short row padded — no cell-stream shift
+
+
+def test_whitespace_alt_raises_at_generation_time(tmp_path):
+    from project_remedy.rebuild.ast import AssetRef, FigureBlock
+
+    block = FigureBlock(asset_ref="img-1", alt=" ")  # min_length=1 passes; generator must still refuse
+    request = make_request(
+        asset_dir=tmp_path,
+        content=[block],
+        assets={"img-1": AssetRef(path=str(tmp_path / "img-1.png"), mime="image/png")},
+    )
+    with pytest.raises(GeneratorError, match="empty alt"):
+        generate(request, asset_paths={"img-1": "img-1.png"})

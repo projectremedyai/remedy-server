@@ -59,21 +59,32 @@ def _emit_runs(runs: list[Run]) -> str:
     return "".join(parts)
 
 
+def _lang_region(language: str) -> tuple[str, str | None]:
+    """Split a BCP-47-ish tag ("en-US") into typst's separate lang/region
+    params — typst 0.15 rejects a combined tag in `lang:` (2/3-letter code only)."""
+    parts = language.split("-")
+    lang = parts[0]
+    region = parts[1] if len(parts) > 1 and parts[1] else None
+    return lang, region
+
+
 def _preamble(request: RebuildRequest) -> str:
     margin = request.page.margin
     unit = margin.unit
-    return "\n".join(
-        [
-            f'#set document(title: "{escape_string(request.metadata.title)}")',
-            f'#set text(lang: "{escape_string(request.metadata.language)}")',
-            "#set smartquote(enabled: false)",
-            (
-                f'#set page(paper: "{_PAPER[request.page.size]}", margin: ('
-                f"top: {margin.top}{unit}, right: {margin.right}{unit}, "
-                f"bottom: {margin.bottom}{unit}, left: {margin.left}{unit}))"
-            ),
-        ]
+    lang, region = _lang_region(request.metadata.language)
+    lines = [
+        f'#set document(title: "{escape_string(request.metadata.title)}")',
+        f'#set text(lang: "{escape_string(lang)}")',
+    ]
+    if region:
+        lines.append(f'#set text(region: "{escape_string(region)}")')
+    lines.append("#set smartquote(enabled: false)")
+    lines.append(
+        f'#set page(paper: "{_PAPER[request.page.size]}", margin: ('
+        f"top: {margin.top}{unit}, right: {margin.right}{unit}, "
+        f"bottom: {margin.bottom}{unit}, left: {margin.left}{unit}))"
     )
+    return "\n".join(lines)
 
 
 def _emit_heading(block: HeadingBlock) -> str:
