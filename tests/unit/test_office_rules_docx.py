@@ -73,3 +73,40 @@ def test_rule_1_2_language(tmp_path):
     assert _run("OOXML-DOCX-1.2", good).status == "Passed"
     result = _run("OOXML-DOCX-1.2", bad)
     assert result.status == "Failed" and result.rule_id == "docx-language"
+
+
+def test_rule_2_1_headings_present(tmp_path):
+    good = make_docx(tmp_path / "g.docx", headings=[("T", 0)])
+    bad = make_docx(tmp_path / "b.docx", body_paragraphs=["Just plain body text here."])
+    assert _run("OOXML-DOCX-2.1", good).status == "Passed"
+    result = _run("OOXML-DOCX-2.1", bad)
+    assert result.status == "Failed" and result.rule_id == "docx-headings"
+
+
+def test_rule_2_2_no_level_skips(tmp_path):
+    good = make_docx(tmp_path / "g.docx", headings=[("T", 0), ("A", 1), ("B", 2)])
+    skip = make_docx(tmp_path / "s.docx", headings=[("A", 1), ("C", 3)])
+    first_deep = make_docx(tmp_path / "f.docx", headings=[("Only", 2)])
+    assert _run("OOXML-DOCX-2.2", good).status == "Passed"
+    result = _run("OOXML-DOCX-2.2", skip)
+    assert result.status == "Failed"
+    assert any("1 -> 3" in d or "1 → 3" in d for d in result.details)
+    assert _run("OOXML-DOCX-2.2", first_deep).status == "Failed"
+
+
+def test_rule_2_2_vacuous_pass_without_headings(tmp_path):
+    none = make_docx(tmp_path / "n.docx", body_paragraphs=["No headings at all in here."])
+    assert _run("OOXML-DOCX-2.2", none).status == "Passed"
+
+
+def test_rule_2_3_no_orphan_intro_text(tmp_path):
+    good = make_docx(tmp_path / "g.docx", headings=[("T", 0)],
+                     body_paragraphs=["Body paragraph following the title."])
+    bad = make_docx(tmp_path / "b.docx", headings=[("T", 0)],
+                    body_paragraphs=["Intro before any heading.", "More body."],
+                    body_first=True)
+    empty = make_docx(tmp_path / "e.docx")
+    assert _run("OOXML-DOCX-2.3", good).status == "Passed"
+    result = _run("OOXML-DOCX-2.3", bad)
+    assert result.status == "Failed" and result.details
+    assert _run("OOXML-DOCX-2.3", empty).status == "Passed"  # vacuous: nothing to mislead
