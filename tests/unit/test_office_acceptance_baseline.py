@@ -92,3 +92,40 @@ def test_acceptance_passed_reflects_failures(tmp_path):
     result = evaluate_office_acceptance(good)
     assert result.openable
     assert result.passed
+
+
+def test_acceptance_screen_reader_issues_mirror_checker_failures(tmp_path):
+    """De-dup regression (perf follow-up): screen_reader issues must still
+    mirror the checker's Failed rule ids exactly, even though the engine now
+    runs once and the screen-reader result is derived from the same report."""
+    bad = make_docx(tmp_path / "bad.docx")  # no title/language/headings
+    result = evaluate_office_acceptance(bad)
+
+    failed_rule_ids = {r.rule_id for r in result.checker_failures}
+    mirrored_rule_ids = {issue.rule_id for issue in result.screen_reader_result.issues}
+
+    assert failed_rule_ids
+    assert mirrored_rule_ids == failed_rule_ids
+    assert all(issue.severity == "error" for issue in result.screen_reader_result.issues)
+
+
+def test_acceptance_runs_rule_engine_exactly_once(tmp_path, monkeypatch):
+    """evaluate_office_acceptance must run OfficeAccessibilityChecker.run_all
+    exactly once (previously it ran twice: once for checker_report, once more
+    inside run_office_screen_reader_checks)."""
+    from project_remedy.office_checker import OfficeAccessibilityChecker
+
+    call_count = 0
+    original_run_all = OfficeAccessibilityChecker.run_all
+
+    def counting_run_all(self):
+        nonlocal call_count
+        call_count += 1
+        return original_run_all(self)
+
+    monkeypatch.setattr(OfficeAccessibilityChecker, "run_all", counting_run_all)
+
+    bad = make_docx(tmp_path / "bad.docx")
+    evaluate_office_acceptance(bad)
+
+    assert call_count == 1

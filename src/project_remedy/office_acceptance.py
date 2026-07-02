@@ -174,7 +174,7 @@ def evaluate_office_acceptance(
             package_result=package_result,
         )
     checker_report = run_office_checker(file_path, resolved_type)
-    sr_result = run_office_screen_reader_checks(file_path, resolved_type)
+    sr_result = run_office_screen_reader_checks(file_path, resolved_type, checker_report=checker_report)
     return OfficeAcceptanceResult(
         file_path=file_path,
         file_type=resolved_type,
@@ -198,13 +198,18 @@ def run_office_checker(file_path: Path, file_type: FileType) -> OfficeCheckRepor
     raise ValueError(f"Unsupported Office acceptance type: {file_type}")
 
 
-def run_office_screen_reader_checks(file_path: Path, file_type: FileType) -> OfficeScreenReaderResult:
+def run_office_screen_reader_checks(
+    file_path: Path,
+    file_type: FileType,
+    *,
+    checker_report: OfficeCheckReport | None = None,
+) -> OfficeScreenReaderResult:
     if file_type == FileType.DOCX:
-        return _screen_reader_docx(file_path)
+        return _screen_reader_docx(file_path, report=checker_report)
     if file_type == FileType.PPTX:
-        return _screen_reader_pptx(file_path)
+        return _screen_reader_pptx(file_path, report=checker_report)
     if file_type == FileType.XLSX:
-        return _screen_reader_xlsx(file_path)
+        return _screen_reader_xlsx(file_path, report=checker_report)
     raise ValueError(f"Unsupported Office acceptance type: {file_type}")
 
 
@@ -310,8 +315,8 @@ def _check_xlsx(file_path: Path) -> OfficeCheckReport:
     return OfficeCheckReport(file_path=file_path, file_type=FileType.XLSX, results=results)
 
 
-def _screen_reader_docx(file_path: Path) -> OfficeScreenReaderResult:
-    report = run_office_checker(file_path, FileType.DOCX)
+def _screen_reader_docx(file_path: Path, report: OfficeCheckReport | None = None) -> OfficeScreenReaderResult:
+    report = report or run_office_checker(file_path, FileType.DOCX)
     issues = [
         OfficeScreenReaderIssue(
             rule_id=result.rule_id,
@@ -325,8 +330,8 @@ def _screen_reader_docx(file_path: Path) -> OfficeScreenReaderResult:
     return OfficeScreenReaderResult(file_path=file_path, file_type=FileType.DOCX, issues=issues)
 
 
-def _screen_reader_pptx(file_path: Path) -> OfficeScreenReaderResult:
-    report = run_office_checker(file_path, FileType.PPTX)
+def _screen_reader_pptx(file_path: Path, report: OfficeCheckReport | None = None) -> OfficeScreenReaderResult:
+    report = report or run_office_checker(file_path, FileType.PPTX)
     issues = [
         OfficeScreenReaderIssue(
             rule_id=result.rule_id,
@@ -340,8 +345,8 @@ def _screen_reader_pptx(file_path: Path) -> OfficeScreenReaderResult:
     return OfficeScreenReaderResult(file_path=file_path, file_type=FileType.PPTX, issues=issues)
 
 
-def _screen_reader_xlsx(file_path: Path) -> OfficeScreenReaderResult:
-    report = run_office_checker(file_path, FileType.XLSX)
+def _screen_reader_xlsx(file_path: Path, report: OfficeCheckReport | None = None) -> OfficeScreenReaderResult:
+    report = report or run_office_checker(file_path, FileType.XLSX)
     issues = [
         OfficeScreenReaderIssue(
             rule_id=result.rule_id,
