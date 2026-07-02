@@ -181,3 +181,32 @@ def rule_docx_alt_not_placeholder(ctx: DocxContext) -> OfficeCheckResult:
         if alt and _PLACEHOLDER_ALT_RE.match(alt):
             offenders.append(f"image {ordinal} ({kind}) alt is a placeholder: '{alt}'")
     return _make_result("OOXML-DOCX-3.2", flagged=bool(offenders), details=offenders)
+
+
+# --- Checkpoint 4: tables ----------------------------------------------------
+
+@docx_rule("OOXML-DOCX-4.1")
+def rule_docx_table_header_marked(ctx: DocxContext) -> OfficeCheckResult:
+    unmarked: list[str] = []
+    for index, tbl in enumerate(ctx.body_root.iter(qn_w("tbl")), start=1):
+        first_tr = tbl.find(qn_w("tr"))
+        if first_tr is None:
+            continue
+        tr_pr = first_tr.find(qn_w("trPr"))
+        if tr_pr is None or tr_pr.find(qn_w("tblHeader")) is None:
+            unmarked.append(f"table {index}: first row lacks w:tblHeader")
+    return _make_result("OOXML-DOCX-4.1", flagged=bool(unmarked), details=unmarked)
+
+
+@docx_rule("OOXML-DOCX-4.2")
+def rule_docx_no_merged_header_cells(ctx: DocxContext) -> OfficeCheckResult:
+    merged: list[str] = []
+    for index, tbl in enumerate(ctx.body_root.iter(qn_w("tbl")), start=1):
+        first_tr = tbl.find(qn_w("tr"))
+        if first_tr is None:
+            continue
+        for tc_pr in first_tr.iter(qn_w("tcPr")):
+            if tc_pr.find(qn_w("gridSpan")) is not None or tc_pr.find(qn_w("vMerge")) is not None:
+                merged.append(f"table {index}: header row contains merged cells (gridSpan/vMerge)")
+                break
+    return _make_result("OOXML-DOCX-4.2", flagged=bool(merged), details=merged)

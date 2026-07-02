@@ -152,3 +152,20 @@ def test_rule_3_2_placeholder_alt(tmp_path):
     assert any("image1.png" in d for d in result.details)
     # missing alt is 3.1's job; 3.2 passes vacuously
     assert _run("OOXML-DOCX-3.2", missing).status == "Passed"
+
+
+def test_rule_4_1_table_header_marked(tmp_path):
+    good = make_docx(tmp_path / "g.docx", tables=1, mark_table_headers=True)
+    bad = make_docx(tmp_path / "b.docx", tables=1, mark_table_headers=False)
+    assert _run("OOXML-DOCX-4.1", good).status == "Passed"
+    result = _run("OOXML-DOCX-4.1", bad)
+    assert result.status == "Failed" and result.rule_id == "docx-table-headers"
+    assert any("table 1" in d for d in result.details)
+
+
+def test_rule_4_2_no_merged_header_cells(tmp_path):
+    good = make_docx(tmp_path / "g.docx", tables=1)
+    bad = make_docx(tmp_path / "b.docx", tables=1, merge_header_cells=True)
+    assert _run("OOXML-DOCX-4.2", good).status == "Passed"
+    result = _run("OOXML-DOCX-4.2", bad)
+    assert result.status == "Failed" and result.fixable is False
