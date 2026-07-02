@@ -6,7 +6,16 @@ from __future__ import annotations
 
 import pytest
 
-from project_remedy.rebuild.ast import HeadingBlock, ParagraphBlock, Run
+from project_remedy.rebuild.ast import (
+    HeadingBlock,
+    ListBlock,
+    ListItem,
+    ParagraphBlock,
+    Run,
+    SimpleTableBlock,
+    TableCell,
+    TableRow,
+)
 from project_remedy.rebuild.typst_generator import escape_markup, escape_string, generate
 from tests.unit.rebuild_fixtures import make_request
 
@@ -26,6 +35,7 @@ def test_escape_string_for_code_context():
 
 
 def test_preamble_sets_language_title_page_and_smartquote(tmp_path):
+    # content=[] avoids firing Task-4/5 stubs
     src = generate(make_request(asset_dir=tmp_path, content=[], assets={}), asset_paths={})
     assert '#set text(lang: "en-US")' in src or '#set text(lang: "en")' in src
     assert '#set document(title: "Sample Form")' in src
@@ -48,3 +58,54 @@ def test_heading_and_paragraph_emit_semantic_markup(tmp_path):
     assert "Plain _ital_ end." in src
     # FR-9: no styled-text heading fallback anywhere
     assert "#text(" not in src
+
+
+def _para(text: str) -> ParagraphBlock:
+    return ParagraphBlock(runs=[Run(text=text)])
+
+
+def test_list_emits_markup_never_label_prose(tmp_path):
+    block = ListBlock(
+        ordered=True,
+        items=[
+            ListItem(label_runs=[Run(text="1.")], body=[_para("alpha")]),
+            ListItem(label_runs=[Run(text="2.")], body=[_para("beta")]),
+        ],
+    )
+    request = make_request(asset_dir=tmp_path, content=[block], assets={})
+    src = generate(request, asset_paths={})
+    assert "+ alpha" in src and "+ beta" in src
+    assert "1." not in src and "2." not in src  # Caveat-2: labels never leak as prose
+
+
+def test_unordered_and_nested_lists(tmp_path):
+    inner = ListBlock(ordered=False, items=[ListItem(label_runs=[], body=[_para("sub")])])
+    block = ListBlock(
+        ordered=False,
+        items=[ListItem(label_runs=[Run(text="•")], body=[_para("outer"), inner])],
+    )
+    request = make_request(asset_dir=tmp_path, content=[block], assets={})
+    src = generate(request, asset_paths={})
+    assert "- outer" in src
+    assert "  - sub" in src  # nested item indented under its parent
+
+
+def test_table_header_row_and_row_header_degradation(tmp_path):
+    block = SimpleTableBlock(
+        rows=[
+            TableRow(cells=[TableCell(text="Name", header="col"), TableCell(text="Age", header="both")]),
+            TableRow(cells=[TableCell(text="Alice", header="row"), TableCell(text="30")]),
+        ]
+    )
+    request = make_request(asset_dir=tmp_path, content=[block], assets={})
+    src = generate(request, asset_paths={})
+    assert "#table(" in src and "columns: 2" in src
+    assert 'table.header([Name], [Age])' in src
+    assert "[Alice], [30]" in src  # row-header cell degrades to a plain cell (spike decision)
+
+
+def test_table_cell_text_is_escaped(tmp_path):
+    block = SimpleTableBlock(rows=[TableRow(cells=[TableCell(text="a#b"), TableCell(text="c[d]")])])
+    request = make_request(asset_dir=tmp_path, content=[block], assets={})
+    src = generate(request, asset_paths={})
+    assert "[a\\#b], [c\\[d\\]]" in src

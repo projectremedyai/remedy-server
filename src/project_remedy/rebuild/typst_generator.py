@@ -84,12 +84,50 @@ def _emit_paragraph(block: ParagraphBlock) -> str:
     return _emit_runs(block.runs)
 
 
-def _emit_list(block, asset_paths):  # implemented in Task 4
-    raise GeneratorError("list emission not yet implemented")
+def _emit_list(block: ListBlock, asset_paths: dict[str, str], indent: int = 0) -> str:
+    """Markup lists: '-' unordered / '+' ordered. label_runs are NEVER emitted
+    as prose (Caveat 2 — Typst's markers are the semantic list construct)."""
+    marker = "+" if block.ordered else "-"
+    pad = "  " * indent
+    lines: list[str] = []
+    for item in block.items:
+        first = True
+        for child in item.body:
+            if isinstance(child, ListBlock):
+                lines.append(_emit_list(child, asset_paths, indent + 1))
+            elif first:
+                lines.append(f"{pad}{marker} {_emit_block(child, asset_paths)}")
+                first = False
+            else:
+                # continuation content of the same item, indented under it
+                lines.append(f"{pad}  {_emit_block(child, asset_paths)}")
+        if first:  # item had no body at all
+            lines.append(f"{pad}{marker} ")
+    return "\n".join(lines)
 
 
-def _emit_table(block):  # implemented in Task 4
-    raise GeneratorError("table emission not yet implemented")
+def _emit_table(block: SimpleTableBlock) -> str:
+    if not block.rows:
+        raise GeneratorError("SimpleTableBlock with zero rows")
+    columns = max(len(row.cells) for row in block.rows)
+
+    def cell(c) -> str:
+        return f"[{escape_markup(c.text)}]"
+
+    lines = [f"#table(", f"  columns: {columns},"]
+    rows = list(block.rows)
+    first = rows[0]
+    if first.cells and all(c.header in ("col", "both") for c in first.cells):
+        header_cells = ", ".join(cell(c) for c in first.cells)
+        lines.append(f"  table.header({header_cells}),")
+        rows = rows[1:]
+    for row in rows:
+        # 'row'/'both' header cells outside a full header row degrade to plain
+        # cells: Typst 0.15's row-header construct is behind an unstable flag
+        # (docs/typst_backend_decisions.md).
+        lines.append("  " + ", ".join(cell(c) for c in row.cells) + ",")
+    lines.append(")")
+    return "\n".join(lines)
 
 
 def _emit_figure(block, asset_paths):  # implemented in Task 5
