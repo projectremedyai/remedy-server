@@ -190,6 +190,7 @@ def build_router(
         request: Request,
         file: UploadFile = File(...),
         allow_semantic_rebuild: bool = Form(False),
+        rebuild_backend: str | None = Form(None),
         quality: bool = Query(
             False,
             description="Opt in to attaching quality-layer audit results to the remediation report.",
@@ -203,6 +204,8 @@ def build_router(
         # after enqueue races with the worker's store.get() snapshot on
         # the shared event loop.
         metadata: dict[str, object] = {"allow_semantic_rebuild": allow_semantic_rebuild}
+        if rebuild_backend:
+            metadata["rebuild_backend"] = rebuild_backend
         if quality:
             metadata["quality"] = True
         body = await _finalize_upload_and_enqueue(

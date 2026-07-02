@@ -153,6 +153,8 @@ class RebuildConfig:
     vision_concurrency: int = 4
     sidecar_timeout_s: float = 120.0
     markdown_parser: str = "markdown-it-py"
+    backend: str = "questpdf"          # "questpdf" | "typst" (FR-1)
+    typst_timeout_s: float = 120.0     # NFR-2: budgeted like sidecar_timeout_s
 
 
 @dataclass
@@ -373,6 +375,11 @@ def load_config(
         markdown_parser=_env(
             "REBUILD_MARKDOWN_PARSER",
             rebuild_yml.get("markdown_parser", "markdown-it-py"),
+        ),
+        backend=_env("REBUILD_BACKEND", rebuild_yml.get("backend", "questpdf")),
+        typst_timeout_s=_env_float(
+            "REBUILD_TYPST_TIMEOUT_S",
+            rebuild_yml.get("typst_timeout_s", 120.0),
         ),
     )
 

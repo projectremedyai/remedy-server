@@ -31,10 +31,20 @@ from project_remedy.rebuild.ast_builder import (
     build as _ast_build,
 )
 from project_remedy.rebuild.markdown_parser import parse as _md_parse
+from project_remedy.rebuild.acroform_gate import has_acroform as _has_acroform
 from project_remedy.rebuild.sidecar import (
     QuestPdfSidecar as _Sidecar,
     SidecarError as _SidecarError,
     SidecarTimeout as _SidecarTimeout,
+)
+from project_remedy.rebuild.struct_assert import verify as _struct_verify
+from project_remedy.rebuild.typst_renderer import (
+    TypstCompileError as _TypstCompileError,
+    TypstNotAvailable as _TypstNotAvailable,
+    TypstRenderer as _TypstRenderer,
+    TypstTimeout as _TypstTimeout,
+    TypstUnsupportedConstruct as _TypstUnsupported,
+    resolve_typst_binary as _resolve_typst_binary,
 )
 from project_remedy.rebuild.vision_enricher import (
     VisionEnrichmentError as _VisionEnrichmentError,
@@ -205,6 +215,7 @@ async def _remediate_pdf(job: Job, store: JobStore, settings: Settings) -> None:
     except Exception:  # noqa: BLE001
         meta = {}
     allow_rebuild = bool(meta.get("allow_semantic_rebuild", False))
+    rebuild_backend_override = meta.get("rebuild_backend") or None
     quality_requested = bool(meta.get("quality", False))
 
     verapdf_failed = (
@@ -224,6 +235,7 @@ async def _remediate_pdf(job: Job, store: JobStore, settings: Settings) -> None:
             )
             await _rebuild_from_semantics(
                 input_path, output_path, cfg, job, store, settings,
+                backend_override=rebuild_backend_override,
             )
             return
         except Exception as exc:  # noqa: BLE001
@@ -516,17 +528,25 @@ async def _rebuild_from_semantics(
     job: Job,
     store: JobStore,
     settings: Settings,
+    backend_override: str | None = None,
 ) -> None:
     """Run the full rebuild tier. Writes remediated.pdf on success.
 
     Orchestrates extractor → (markdown_parser || vision_enricher via gather)
-    → ast_builder → sidecar.render → acceptance(rebuild_mode=True) → finalize.
+    → ast_builder → <backend>.render → acceptance(rebuild_mode=True) → finalize.
     Specific ``rebuild_*`` error codes on failure. Marks job ``status=done``
     or ``status=failed`` itself — caller should ``return`` after awaiting.
     """
     from project_remedy.extractor import ContentExtractor
     from project_remedy.ollama_client import OllamaClient
     from project_remedy.pdf_vision import create_provider_from_config
+
+    # FR-13 pre-flight: fillable forms must never be silently flattened by an
+    # AST rebuild (neither backend regenerates form fields). Backend-agnostic,
+    # runs before extraction so AcroForm sources are rejected up front.
+    if await asyncio.to_thread(_has_acroform, input_path):
+        await store.update(job.id, status="failed", error="rebuild_acroform_present")
+        return
 
     # --- step 1: extract ---
     db = DatabaseManager()
@@ -611,28 +631,84 @@ async def _rebuild_from_semantics(
         )
         return
 
-    # --- step 3: render via sidecar ---
-    binary = _resolve_sidecar_binary()
-    if binary is None:
-        await store.update(
-            job.id, status="failed",
-            error="rebuild_sidecar_not_available",
-        )
-        return
+    # --- step 3: render via the selected backend ---
+    backend = (
+        backend_override or getattr(cfg.rebuild, "backend", "questpdf")
+    ).strip().lower()
+    if backend == "questpdf":
+        binary = _resolve_sidecar_binary()
+        if binary is None:
+            await store.update(
+                job.id, status="failed",
+                error="rebuild_sidecar_not_available",
+            )
+            return
 
-    sidecar = _Sidecar(binary_path=binary, timeout_s=cfg.rebuild.sidecar_timeout_s)
-    try:
-        pdf_bytes = await sidecar.render(request)
-    except _SidecarTimeout as exc:
-        await store.update(
-            job.id, status="failed",
-            error=f"rebuild_sidecar_timeout: {exc}",
+        sidecar = _Sidecar(binary_path=binary, timeout_s=cfg.rebuild.sidecar_timeout_s)
+        try:
+            pdf_bytes = await sidecar.render(request)
+        except _SidecarTimeout as exc:
+            await store.update(
+                job.id, status="failed",
+                error=f"rebuild_sidecar_timeout: {exc}",
+            )
+            return
+        except _SidecarError as exc:
+            await store.update(
+                job.id, status="failed",
+                error=f"rebuild_sidecar_failed: {exc}",
+            )
+            return
+    elif backend == "typst":
+        typst_binary = _resolve_typst_binary()
+        if typst_binary is None:
+            await store.update(
+                job.id, status="failed",
+                error="rebuild_typst_not_available",
+            )
+            return
+
+        renderer = _TypstRenderer(
+            binary_path=typst_binary,
+            timeout_s=getattr(cfg.rebuild, "typst_timeout_s", 120.0),
         )
-        return
-    except _SidecarError as exc:
+        try:
+            pdf_bytes = await renderer.render(request)
+        except _TypstTimeout as exc:
+            await store.update(
+                job.id, status="failed",
+                error=f"rebuild_typst_timeout: {exc}",
+            )
+            return
+        except _TypstUnsupported as exc:
+            await store.update(
+                job.id, status="failed",
+                error=f"rebuild_typst_unsupported_construct: {exc}",
+            )
+            return
+        except (_TypstCompileError, _TypstNotAvailable) as exc:
+            await store.update(
+                job.id, status="failed",
+                error=f"rebuild_typst_compile_failed: {exc}",
+            )
+            return
+
+        # FR-10/11: a struct-assert failure is a generator bug — hard fail,
+        # before the shared acceptance step below.
+        assert_report = await asyncio.to_thread(_struct_verify, request, pdf_bytes)
+        if not assert_report.passed:
+            await store.update(
+                job.id, status="failed",
+                error=(
+                    "rebuild_struct_assert_failed: "
+                    f"{'; '.join(assert_report.mismatches)[:500]}"
+                ),
+            )
+            return
+    else:
         await store.update(
             job.id, status="failed",
-            error=f"rebuild_sidecar_failed: {exc}",
+            error=f"rebuild_typst_unsupported_construct: unknown backend {backend!r}",
         )
         return
 
