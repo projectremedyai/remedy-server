@@ -17754,12 +17754,61 @@ def _fix_screen_reader_figure_flow_impl(pdf: pikepdf.Pdf) -> list[str]:
     return changes
 
 
+def _marked_content_is_whitespace_only(page, mcids: list[int]) -> bool:
+    """True only if every string drawn inside the given MCID-marked blocks is
+    whitespace (or the blocks draw nothing).
+
+    Guards the destructive empty-leaf removal: fitz text extraction can return
+    empty for a leaf that actually DRAWS real glyphs (e.g. a font with no
+    ToUnicode), and removing such a leaf — then demoting its marking to /Artifact
+    — would hide real text from assistive tech while still passing veraPDF. When
+    the marked content uses hex strings (undecodable CID glyphs) or draws an
+    XObject, we conservatively treat it as real content and keep the leaf.
+    """
+    if not mcids:
+        return True
+    raw = _read_page_content(page)
+    if not raw:
+        return True
+    text = raw.decode("latin-1", errors="replace")
+    ws = set(" \t\r\n\x00\x0c")
+    for mcid in set(mcids):
+        pattern = (
+            rf"/{_PDF_NAME_TOKEN}\s*"
+            rf"<<(?:<[^>]*>|(?!>>).)*?/MCID\s+{mcid}\b"
+            rf"(?:<[^>]*>|(?!>>).)*?>>\s*BDC\b(?P<body>.*?)EMC"
+        )
+        for m in re.finditer(pattern, text, flags=re.S):
+            body = m.group("body")
+            # hex string operand (CID glyphs we cannot decode) or image draw ->
+            # cannot prove it is whitespace, so keep the leaf.
+            if re.search(r"<[0-9A-Fa-f][0-9A-Fa-f\s]*>", body) or re.search(r"\bDo\b", body):
+                return False
+            for s in re.findall(r"\((?:[^()\\]|\\.)*\)", body):
+                inner = (
+                    s[1:-1]
+                    .replace("\\(", "(")
+                    .replace("\\)", ")")
+                    .replace("\\\\", "\\")
+                )
+                if any(ch not in ws for ch in inner):
+                    return False
+    return True
+
+
 def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
-    """Remove empty leaf P/Span tags that only point to whitespace content."""
+    """Remove empty leaf P/Span tags that only point to whitespace content.
+
+    A removed leaf's content-stream MCID marking is demoted to /Artifact so it is
+    never left orphaned (marked content with no structure element → veraPDF
+    7.1-3). Leaves whose marked content is not provably whitespace are kept.
+    """
     if not _should_run_empty_leaf_cleanup(pdf):
         return 0
 
-    removable: list[tuple[pikepdf.Dictionary, pikepdf.Dictionary]] = []
+    removable: list[
+        tuple[pikepdf.Dictionary, pikepdf.Dictionary, int, list[int]]
+    ] = []
     page_text_cache: dict[int, dict[int, str]] = {}
     actual_text_cleared = 0
 
@@ -17792,7 +17841,7 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
 
         if not mcids:
             if not node_has_direct_content(node):
-                removable.append((node, parent))
+                removable.append((node, parent, page_idx, []))
             continue
 
         page_text = page_text_cache.get(page_idx)
@@ -17810,20 +17859,30 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
         if text:
             continue
 
-        removable.append((node, parent))
+        # Extraction reports empty, but only remove if the marked content is
+        # provably whitespace at the content-stream level — otherwise a
+        # real-glyph leaf whose text merely failed to extract (e.g. no
+        # ToUnicode) would be deleted and its content hidden from AT.
+        if not _marked_content_is_whitespace_only(pdf.pages[page_idx], mcids):
+            continue
+
+        removable.append((node, parent, page_idx, mcids))
 
     removed = 0
     removals_by_parent: dict[
         tuple[str, object],
         tuple[pikepdf.Dictionary, set[tuple[str, object]], list[pikepdf.Dictionary]],
     ] = {}
-    for node, parent in removable:
+    artifact_targets: dict[int, set[int]] = {}
+    for node, parent, page_idx, mcids in removable:
         parent_key = _pdf_object_identity(parent)
         if parent_key not in removals_by_parent:
             removals_by_parent[parent_key] = (parent, set(), [])
         _parent, node_keys, nodes = removals_by_parent[parent_key]
         node_keys.add(_pdf_object_identity(node))
         nodes.append(node)
+        if mcids and 0 <= page_idx < len(pdf.pages):
+            artifact_targets.setdefault(page_idx, set()).update(mcids)
 
     for parent, node_keys, nodes in removals_by_parent.values():
         removed_here = _remove_nodes_from_parent(parent, node_keys)
@@ -17831,6 +17890,12 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
             removed += removed_here
         for node in nodes:
             _clear_parent_tree_mcids(pdf, node)
+
+    # Demote each removed leaf's marked content to /Artifact so no MCID marking is
+    # left orphaned in the content stream (marked content with no structure
+    # element → veraPDF 7.1-3). Mirrors fix_artifact_structure_elements.
+    for page_idx, mcids in artifact_targets.items():
+        _artifactize_page_mcids(pdf, pdf.pages[page_idx], sorted(mcids))
 
     # Cascade-prune: remove container nodes left empty after leaf removal.
     removed += _prune_dead_and_empty_nodes(pdf)
