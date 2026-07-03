@@ -16611,6 +16611,21 @@ def fix_all(
             except Exception as exc:  # never let the render-repair abort remediation
                 report.skipped.append(f"BT/ET content-stream repair: error — {exc}")
 
+            # Terminal sweep: some passes (notably fix_page_retag) leave content
+            # marked with an MCID that never got a structure element — veraPDF
+            # 7.1-3. Artifact the provably-whitespace orphans; real-content
+            # orphans are left untouched (never hidden). Scoped like the empty-leaf
+            # cleanup so the large-doc path is unaffected.
+            if only is None and _should_run_empty_leaf_cleanup(pdf):
+                try:
+                    swept = _artifact_orphan_whitespace_mcids(pdf)
+                    if swept:
+                        report.changes.append(
+                            f"Artifacted {swept} orphaned whitespace marked-content span(s)"
+                        )
+                except Exception as exc:  # never let the sweep abort remediation
+                    report.skipped.append(f"Orphan whitespace sweep: error — {exc}")
+
             if not dry_run:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 _save_remediated_pdf(pdf, output_path)
@@ -17903,6 +17918,74 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
     removed += actual_text_cleared
 
     return removed
+
+
+def _artifact_orphan_whitespace_mcids(pdf: pikepdf.Pdf) -> int:
+    """Terminal sweep: demote whitespace MCID markings left orphaned by any pass.
+
+    Some passes (notably fix_page_retag) mark content with an MCID that never
+    gets a corresponding structure element; veraPDF flags each as 7.1-3
+    ("Content is neither marked as Artifact nor tagged as real content"). This
+    artifacts the *provably-whitespace* orphans; real-content orphans are left
+    untouched so no visible text is ever hidden (they need re-tagging, not
+    artifacting). Reuses the same whitespace guard as _fix_empty_leaf_text_elements.
+    """
+    struct_root = pdf.Root.get("/StructTreeRoot")
+    if struct_root is None:
+        return 0
+
+    # 1) MCIDs referenced by the structure tree, bucketed by page object.
+    referenced: dict[tuple[int, int], set[int]] = {}
+    visited: set[tuple[int, int]] = set()
+
+    def _record(pg, mcid):
+        if isinstance(pg, pikepdf.Dictionary):
+            referenced.setdefault(pg.objgen, set()).add(int(mcid))
+
+    def _walk(node, inherited_pg):
+        oid = getattr(node, "objgen", None)
+        if oid is not None:
+            if oid in visited:
+                return
+            visited.add(oid)
+        if not isinstance(node, pikepdf.Dictionary):
+            return
+        pg = node.get("/Pg") if "/Pg" in node else inherited_pg
+        kids = node.get("/K")
+        if kids is None:
+            return
+        items = kids if isinstance(kids, pikepdf.Array) else [kids]
+        for item in items:
+            if isinstance(item, int):
+                _record(pg, item)
+            elif isinstance(item, pikepdf.Dictionary):
+                if item.get("/Type") == pikepdf.Name("/MCR") and item.get("/MCID") is not None:
+                    _record(item.get("/Pg", pg), int(item["/MCID"]))
+                _walk(item, pg)
+
+    try:
+        _walk(struct_root.get("/K"), None)
+    except Exception:
+        return 0
+
+    # 2) Per page, artifact whitespace-only MCID markings not referenced above.
+    total = 0
+    for page in pdf.pages:
+        raw = _read_page_content(page)
+        if not raw:
+            continue
+        content_mcids = {int(m) for m in re.findall(rb"/MCID\s+(\d+)", raw)}
+        if not content_mcids:
+            continue
+        ref = referenced.get(page.obj.objgen, set())
+        orphans = content_mcids - ref
+        ws_orphans = [
+            mc for mc in sorted(orphans)
+            if _marked_content_is_whitespace_only(page, [mc])
+        ]
+        if ws_orphans:
+            total += _artifactize_page_mcids(pdf, page, ws_orphans)
+    return total
 
 
 _CASCADE_CONTAINER_TYPES = {"Sect", "Div", "NonStruct", "Part", "Art", "BlockQuote"}
