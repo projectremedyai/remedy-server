@@ -652,6 +652,42 @@ def _rebuild_pdf_with_tesseract_ocr(
     return rebuilt_path
 
 
+def _ocr_preserves_real_words(original_text: str, rebuilt_text: str) -> bool:
+    """True if the OCR rebuild keeps at least as many real alphanumeric tokens as
+    the original extraction.
+
+    OCR is a fidelity regression when a page already has extractable content (e.g.
+    a math worksheet whose *symbols* are PUA-encoded but whose words and answer
+    *numbers* extract fine): Tesseract mangles that content while "fixing" the
+    symbols. Counting ASCII alphanumeric tokens ([A-Za-z0-9]+) captures both words
+    and numbers while naturally excluding PUA/replacement noise, so a genuinely
+    broken page (noise only, near-zero real tokens) still passes the gate and gets
+    its OCR rebuild.
+    """
+    def _real_words(text: str) -> int:
+        return len(re.findall(r"[A-Za-z0-9]+", text))
+
+    return _real_words(rebuilt_text) >= _real_words(original_text)
+
+
+def _ocr_rebuild_preserves_real_text(original_path: Path, rebuilt_path: Path) -> bool:
+    """Whole-document real-word retention gate for the OCR preflight."""
+    try:
+        import fitz
+    except Exception:
+        return True  # cannot verify -> do not block
+    def _doc_text(path: Path) -> str:
+        try:
+            doc = fitz.open(str(path))
+        except Exception:
+            return ""
+        try:
+            return "\n".join(pg.get_text("text") for pg in doc)
+        finally:
+            doc.close()
+    return _ocr_preserves_real_words(_doc_text(original_path), _doc_text(rebuilt_path))
+
+
 def _maybe_rebuild_broken_text_layer(
     pdf_path: Path,
     *,
@@ -701,6 +737,18 @@ def _maybe_rebuild_broken_text_layer(
     except Exception as exc:
         tempdir.cleanup()
         return pdf_path, [], [f"Character encoding preflight: {exc}"], None
+
+    # Fidelity gate: OCR is a last-resort regression. If the rebuild loses real
+    # (alphabetic) words versus the original — the math-worksheet case, where the
+    # words extract fine and only the symbols are PUA-encoded — discard it and
+    # keep the original, flagging the residual encoding issue instead.
+    if not _ocr_rebuild_preserves_real_text(pdf_path, rebuilt_path):
+        tempdir.cleanup()
+        pages = _format_page_list(sorted(problem_pages))
+        return pdf_path, [], [
+            "Character encoding preflight: skipped OCR rebuild — it would lose "
+            f"extractable text on page(s) {pages}; kept original text layer"
+        ], None
 
     if analysis.requires_rebuild:
         pages = _format_page_list(analysis.page_numbers)
