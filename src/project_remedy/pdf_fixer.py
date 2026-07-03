@@ -18114,8 +18114,12 @@ def _prune_dead_and_empty_nodes(pdf: pikepdf.Pdf) -> int:
             for node in nodes:
                 _clear_parent_tree_mcids(pdf, node)
 
-    # Rerun table repair if we pruned table nodes
+    # Rerun table repair if we pruned table nodes. Pruning dead/empty cells can
+    # leave rows with unequal column counts (veraPDF 7.2-42/43), so regularity
+    # must be re-enforced here — not just header repair — or the pruned tables
+    # ship irregular.
     if pruned_table_nodes:
+        fix_table_regularity(pdf)
         fix_table_headers(pdf)
         fix_table_header_scope(pdf)
 
