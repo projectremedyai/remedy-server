@@ -2467,8 +2467,13 @@ def _remove_top_level_whitespace_actualtext_spans(text: str) -> tuple[str, int]:
         header = block.header.replace(" ", "").upper()
         body = "".join(lines[block.start + 1:block.end])
         is_actualtext_placeholder = (
-            "/ACTUALTEXT<FEFF0009>" in header
-            or "/ACTUALTEXT<FEFF0007>" in header
+            ("/ACTUALTEXT<FEFF0009>" in header
+             or "/ACTUALTEXT<FEFF0007>" in header)
+            # Only a genuine placeholder: a tab/whitespace-ActualText span that ALSO
+            # draws real text (common in tabular PDFs) must NOT be deleted — that
+            # silently loses the visible words. Require an empty body, as the
+            # is_empty_mcid_span branch below already does.
+            and not _VISIBLE_CONTENT_OPERATOR_RE.search(body)
         )
         is_empty_mcid_span = (
             "/MCID" in header
@@ -12744,6 +12749,14 @@ def _embed_base14_fonts(pdf: pikepdf.Pdf) -> int:
         base_font = str(font.get("/BaseFont", ""))
         path = _base14_substitute_font_path(base_font)
         if path is None:
+            continue
+        # SAFETY (fidelity > compliance): a font with a custom /Differences encoding
+        # maps character codes to glyphs a WinAnsi substitute does NOT reproduce, so
+        # replacing it wholesale silently drops the text those codes render (get_text
+        # loses the words entirely). Leave such a font unembedded — 7.21.4.1 stays for
+        # the alignment-gated embed pass to handle without destroying content.
+        encoding = _resolve_pdf_object(font.get("/Encoding"))
+        if isinstance(encoding, pikepdf.Dictionary) and "/Differences" in encoding:
             continue
         objgen = getattr(font, "objgen", (0, 0))
         if objgen in seen:
