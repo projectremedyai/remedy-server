@@ -2277,9 +2277,17 @@ def _unwrap_nested_artifact_blocks(text: str) -> tuple[str, int]:
     return "".join(cleaned_parts), unwrapped
 
 
+# Marked-content properties can be an inline dict (``<<...>>``) OR a named
+# resource reference into the page /Properties (e.g. ``/PlacedPDF /MC0 BDC``).
+# The shared _PDF_MARKED_PROPS only covers the inline-dict form; this variant
+# also accepts the named form so ``/Tag /Name BDC`` tokenizes as ONE opener
+# (tag=Tag, props=/Name) instead of the named property being mistaken for the
+# tag and the real tag left stranded. Scoped to this tokenizer only.
+_PDF_MARKED_PROPS_OR_NAME = rf"(?:{_PDF_MARKED_PROPS}|/{_PDF_NAME_TOKEN})"
+
 _MARKED_CONTENT_TOKEN_RE = re.compile(
     rf"/(?P<tag>{_PDF_NAME_TOKEN})\s*"
-    rf"(?P<props>{_PDF_MARKED_PROPS})?\s*(?P<op>BDC|BMC)"
+    rf"(?P<props>{_PDF_MARKED_PROPS_OR_NAME})?\s*(?P<op>BDC|BMC)"
     r"|(?P<emc>\bEMC\b)",
     re.S,
 )
