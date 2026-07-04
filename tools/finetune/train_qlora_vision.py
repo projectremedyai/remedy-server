@@ -40,6 +40,7 @@ def _load_conversations(path: Path) -> list[dict]:
     """Load conversation JSONL and materialize image paths as PIL images."""
     from PIL import Image
 
+    base_dir = path.resolve().parent
     rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -47,11 +48,16 @@ def _load_conversations(path: Path) -> list[dict]:
             continue
         rec = json.loads(line)
         # Replace {"type":"image","image":"<path>"} with a loaded PIL image so the
-        # Unsloth vision collator can process it.
+        # Unsloth vision collator can process it. Relative image paths (e.g.
+        # "renders/foo.png") resolve against the JSONL's own directory, so the
+        # trainer works regardless of the current working directory.
         for msg in rec["messages"]:
             for part in msg.get("content", []):
                 if part.get("type") == "image" and isinstance(part.get("image"), str):
-                    part["image"] = Image.open(part["image"]).convert("RGB")
+                    img_path = Path(part["image"])
+                    if not img_path.is_absolute():
+                        img_path = base_dir / img_path
+                    part["image"] = Image.open(img_path).convert("RGB")
         rows.append(rec)
     return rows
 

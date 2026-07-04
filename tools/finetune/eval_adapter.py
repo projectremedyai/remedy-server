@@ -32,7 +32,17 @@ def _valid_json(text: str) -> bool:
 
 
 def _load(val: Path) -> list[dict]:
-    return [json.loads(l) for l in val.read_text(encoding="utf-8").splitlines() if l.strip()]
+    # Resolve relative image paths (e.g. "renders/foo.png") against the val
+    # JSONL's own directory so the eval runs regardless of CWD.
+    base_dir = val.resolve().parent
+    rows = [json.loads(l) for l in val.read_text(encoding="utf-8").splitlines() if l.strip()]
+    for rec in rows:
+        for msg in rec["messages"]:
+            for part in msg.get("content", []):
+                if part.get("type") == "image" and isinstance(part.get("image"), str):
+                    p = Path(part["image"])
+                    part["image"] = str(p if p.is_absolute() else base_dir / p)
+    return rows
 
 
 def _generate(model, tokenizer, rec, max_new_tokens=512) -> str:
@@ -45,16 +55,16 @@ def _generate(model, tokenizer, rec, max_new_tokens=512) -> str:
     prompt = next(p["text"] for p in user if p["type"] == "text")
     messages = [{"role": "user", "content": [
         {"type": "image"}, {"type": "text", "text": prompt}]}]
-    inputs = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=True,
-        return_dict=True, return_tensors="pt",
-    )
-    import torch
-    inputs = {k: (v.to("cuda") if hasattr(v, "to") else v) for k, v in inputs.items()}
-    # attach the image via the processor path
-    proc = tokenizer(image, prompt, return_tensors="pt").to("cuda") if False else None
+    # FastVisionModel returns the processor as `tokenizer`; feed the real image
+    # through it so the model actually sees the page (apply_chat_template alone
+    # only builds the text with an <image> placeholder — no pixels).
+    input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = tokenizer(image, input_text, add_special_tokens=False,
+                       return_tensors="pt").to("cuda")
     out = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True)
-    return tokenizer.batch_decode(out, skip_special_tokens=True)[0]
+    # Decode ONLY the generated continuation, not the echoed prompt.
+    gen_ids = out[:, inputs["input_ids"].shape[1]:]
+    return tokenizer.batch_decode(gen_ids, skip_special_tokens=True)[0]
 
 
 def _score(model, tokenizer, rows) -> dict:
@@ -85,11 +95,22 @@ def main() -> int:
     rows = _load(args.val)
     print(f"[eval] {len(rows)} val examples")
 
+    import gc
+    import torch
+
     base, tok = FastVisionModel.from_pretrained(args.model, load_in_4bit=True)
     print("[eval] BASE   :", _score(base, tok, rows))
 
-    tuned, tok2 = FastVisionModel.from_pretrained(args.model, load_in_4bit=True)
-    tuned.load_adapter(str(args.adapter))
+    # Free the base model before loading the tuned one — two 4-bit 7B models plus
+    # activations would not fit in 16 GB.
+    del base, tok
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # Load the adapter directory directly — Unsloth reads the base model from
+    # adapter_config.json and attaches the LoRA. (Avoids model.load_adapter(),
+    # whose transformers 5.5.0 HF-integration path raises KeyError: 'qwen2_vl'.)
+    tuned, tok2 = FastVisionModel.from_pretrained(str(args.adapter), load_in_4bit=True)
     print("[eval] ADAPTER:", _score(tuned, tok2, rows))
     print("[eval] NOTE: this is a coarse smoke. Run tools/run_vision_eval.py against "
           "the merged+served adapter for the production gates (valid-JSON, latency, "
