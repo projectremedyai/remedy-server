@@ -133,3 +133,37 @@ def test_multitask_union_preserves_resolvable_relative_image_paths(tmp_path):
     assert manifest["tasks_train"] == {"table_structure": 1}
     assert not Path(image_rel).is_absolute()
     assert (out / image_rel).resolve().exists()
+
+
+def test_generate_predictions_rows_align_with_eval_metrics(tmp_path):
+    gen = load_tool("generate_predictions_hf")
+    metrics = load_tool("eval_task_metrics")
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    Image.new("RGB", (20, 20), (255, 255, 255)).save(renders / "sample.png")
+    row = {
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "image", "image": "renders/sample.png"},
+                {"type": "text", "text": "prompt"},
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": "{\"status\":\"pass\"}"}]},
+        ],
+        "meta": {
+            "doc_id": "doc-a",
+            "page": 2,
+            "task": "table_structure",
+            "variant": "pass",
+        },
+    }
+    val = tmp_path / "val.jsonl"
+    val.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    loaded = gen.load_records(val)
+    pred_row = gen.prediction_row(loaded[0], 0, "{\"status\":\"pass\"}")
+
+    assert Path(loaded[0]["messages"][0]["content"][0]["image"]).is_absolute()
+    assert pred_row["example_id"] == metrics.record_key(row, 0)
+    assert pred_row["task"] == "table_structure"
+    assert pred_row["prediction"] == "{\"status\":\"pass\"}"
+    assert pred_row["meta"]["doc_id"] == "doc-a"
