@@ -205,7 +205,13 @@ def summarize(scores: list[dict]) -> dict:
             "count": len(rows),
             "valid_json_rate": round(sum(r["valid_json"] for r in rows) / len(rows), 4),
             "status_accuracy": round(sum(r["status_match"] for r in rows) / len(rows), 4),
-            "confusion": {f"{g}->{p}": n for (g, p), n in sorted(confusion.items())},
+            "confusion": {
+                f"{g}->{p}": n
+                for (g, p), n in sorted(
+                    confusion.items(),
+                    key=lambda item: (str(item[0][0]), str(item[0][1])),
+                )
+            },
             "pass_false_positive_rate": round(
                 sum(bool(r.get("pass_false_positive")) for r in rows) / len(rows), 4
             ),
@@ -274,7 +280,7 @@ def main() -> int:
     scores = []
     for i, rec in enumerate(gold_rows):
         key = record_key(rec, i)
-        pred_text = preds.get(key, preds.get(str(i), ""))
+        pred_text = preds.get(str(i), preds.get(key, ""))
         task = task_name(rec)
         scores.append(score_one(task, parse_jsonish(target_text(rec)), parse_jsonish(pred_text)))
     summary = summarize(scores)

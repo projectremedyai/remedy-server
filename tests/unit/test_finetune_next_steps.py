@@ -58,14 +58,15 @@ def test_table_metric_confusion_and_status_accuracy():
     scores = [
         metrics.score_one("table_structure", {"status": "fail"}, {"status": "fail"}),
         metrics.score_one("table_structure", {"status": "pass"}, {"status": "fail"}),
+        metrics.score_one("table_structure", {"status": "pass"}, None),
     ]
 
     summary = metrics.summarize(scores)
 
     table = summary["by_task"]["table_structure"]
-    assert table["status_accuracy"] == 0.5
-    assert table["confusion"] == {"fail->fail": 1, "pass->fail": 1}
-    assert table["pass_false_positive_rate"] == 0.5
+    assert table["status_accuracy"] == 0.3333
+    assert table["confusion"] == {"fail->fail": 1, "pass->None": 1, "pass->fail": 1}
+    assert table["pass_false_positive_rate"] == 0.3333
 
 
 def test_reading_order_corruption_emits_balanced_fail_and_pass():
@@ -167,3 +168,45 @@ def test_generate_predictions_rows_align_with_eval_metrics(tmp_path):
     assert pred_row["task"] == "table_structure"
     assert pred_row["prediction"] == "{\"status\":\"pass\"}"
     assert pred_row["meta"]["doc_id"] == "doc-a"
+
+
+def test_eval_metrics_prefers_same_order_predictions_for_duplicate_keys(tmp_path):
+    metrics = load_tool("eval_task_metrics")
+    fail_row = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "{\"status\":\"fail\"}"}]},
+        ],
+        "meta": {"doc_id": "doc-a", "page": 1, "task": "table_structure"},
+    }
+    pass_row = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "{\"status\":\"pass\"}"}]},
+        ],
+        "meta": {"doc_id": "doc-a", "page": 1, "task": "table_structure"},
+    }
+    val = tmp_path / "val.jsonl"
+    val.write_text(json.dumps(fail_row) + "\n" + json.dumps(pass_row) + "\n", encoding="utf-8")
+    preds = tmp_path / "preds.jsonl"
+    duplicate_key = metrics.record_key(fail_row, 0)
+    preds.write_text(
+        json.dumps({"example_id": duplicate_key, "prediction": "{\"status\":\"fail\"}"}) + "\n"
+        + json.dumps({"example_id": duplicate_key, "prediction": "{\"status\":\"pass\"}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    gold_rows = metrics.load_jsonl(val)
+    keyed = metrics.load_predictions(preds, gold_rows, False)
+    scores = []
+    for i, rec in enumerate(gold_rows):
+        key = metrics.record_key(rec, i)
+        pred_text = keyed.get(str(i), keyed.get(key, ""))
+        scores.append(metrics.score_one(
+            metrics.task_name(rec),
+            metrics.parse_jsonish(metrics.target_text(rec)),
+            metrics.parse_jsonish(pred_text),
+        ))
+
+    summary = metrics.summarize(scores)
+    assert summary["by_task"]["table_structure"]["status_accuracy"] == 1.0
