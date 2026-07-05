@@ -56,6 +56,7 @@ from project_remedy.pdf_vision import (  # noqa: E402
 from project_remedy.vision_prompts import (  # noqa: E402
     heading_hierarchy_quality_prompt,
     page_alt_text_quality_prompt,
+    wcag_table_verify_prompt,
 )
 
 HASH_PREFIX = re.compile(r"^[0-9a-f]{12}_")
@@ -266,6 +267,37 @@ def _heading_corruption_examples(deliv_order: str, parsed, page: int, emit_pass:
     return examples
 
 
+def _table_corruption_examples(deliv_order: str, parsed, emit_pass: bool):
+    """CORRUPTION-SYNTHESIS table-structure examples (WCAG 1.3.1).
+
+    The delivered tables are human-tagged gold (TH header cells, regular TR/TD).
+    Corrupt by demoting every /TH -> /TD (the classic "data table with no header
+    cells" error) as the 'current' structure; target = flag missing headers.
+    Pass = the correct delivered structure. Renders the src image (identical).
+    Returns [(prompt, target, provenance)].
+    """
+    has_table = any(t in {"Table", "TH", "TD"} for (_i, t, _x) in parsed)
+    th_cells = [(i, t, x) for (i, t, x) in parsed if t == "TH"]
+    if not has_table or not th_cells:
+        return []  # need a table WITH header cells (gold) to corrupt
+    changes = {i: "TD" for (i, t, x) in th_cells}
+    corrupted = _reemit_with_tag_changes(deliv_order, changes)
+    findings = [{
+        "issue_id": "missing_table_headers", "severity": "error",
+        "message": (f"Data table has no header cells; {len(th_cells)} cell(s) "
+                    "that are column/row headers are tagged TD instead of TH"),
+        "fixer": "fix_table_headers",
+    }]
+    out = [(wcag_table_verify_prompt(corrupted),
+            {"status": "fail", "confidence": 0.9, "findings": findings},
+            "delivered-derived-corrupt")]
+    if emit_pass:
+        out.append((wcag_table_verify_prompt(deliv_order),
+                    {"status": "pass", "confidence": 0.9, "findings": []},
+                    "delivered-derived-pass"))
+    return out
+
+
 def _page_examples(task: str, src: Path, deliv: Path, page: int, emit_pass: bool):
     """Return [(prompt, target_dict, provenance)] for one page & task (may be empty)."""
     out = []
@@ -307,6 +339,12 @@ def _page_examples(task: str, src: Path, deliv: Path, page: int, emit_pass: bool
         deliv_order = _get_page_structure_order(deliv, page)
         deliv_parsed = _parse_structure_order(deliv_order)
         out.extend(_heading_corruption_examples(deliv_order, deliv_parsed, page, emit_pass))
+    elif task == "table_structure":
+        # Corruption-synthesis from the delivered table gold (abundant in this
+        # forms/tables corpus). Src & delivered render identically -> src image.
+        deliv_order = _get_page_structure_order(deliv, page)
+        deliv_parsed = _parse_structure_order(deliv_order)
+        out.extend(_table_corruption_examples(deliv_order, deliv_parsed, emit_pass))
     return out
 
 
@@ -330,7 +368,7 @@ def main() -> int:
     args = ap.parse_args()
 
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    supported = {"alt_text_quality", "heading_hierarchy"}
+    supported = {"alt_text_quality", "heading_hierarchy", "table_structure"}
     bad = [t for t in tasks if t not in supported]
     if bad:
         print(f"unsupported task(s) {bad}; supported: {sorted(supported)} "
