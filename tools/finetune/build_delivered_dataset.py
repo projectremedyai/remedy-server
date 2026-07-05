@@ -50,9 +50,13 @@ import pikepdf  # noqa: E402
 from project_remedy.pdf_vision import (  # noqa: E402
     _get_page_figure_alt_entries,
     _get_page_figure_alt_list,
+    _get_page_structure_order,
     render_page_to_image,
 )
-from project_remedy.vision_prompts import page_alt_text_quality_prompt  # noqa: E402
+from project_remedy.vision_prompts import (  # noqa: E402
+    heading_hierarchy_quality_prompt,
+    page_alt_text_quality_prompt,
+)
 
 HASH_PREFIX = re.compile(r"^[0-9a-f]{12}_")
 
@@ -135,6 +139,177 @@ def _alt_target(src_entries, delivered_entries) -> dict:
     return {"figures": figs}
 
 
+def _pass_target(delivered_entries) -> dict:
+    """Gold {figures:[...]} where EVERY figure with real delivered alt is `pass`.
+
+    Used for the v2 "already-good" negative: when the current alt shown to the
+    model IS the human-approved delivered alt, the correct finding is `pass`
+    (nothing to improve). This is the discrimination signal the source->delivered
+    'fail/improve' examples lack — without it the model learns to always flag.
+    """
+    figs = []
+    for d in delivered_entries:
+        d_alt = (d.current_alt_text or "").strip()
+        if not d_alt:
+            continue  # no delivered alt = decorative/artifacted; not a pass case
+        figs.append({"figure_index": d.figure_index, "status": "pass",
+                     "severity": "info", "decorative": False,
+                     "issue_type": "", "message": "",
+                     "suggested_alt_text": "", "confidence": 1.0})
+    return {"figures": figs}
+
+
+_HEADING_TAGS = {"H1", "H2", "H3", "H4", "H5", "H6"}
+_STRUCT_LINE = re.compile(r'^\s*(\d+)\.\s+/(\w+)(?:\s+\(text:\s*"(.*?)"\))?', re.S)
+
+
+def _parse_structure_order(order_str: str) -> list[tuple[int, str, str]]:
+    """Parse `_get_page_structure_order` output → [(element_index, tag, text)]."""
+    out = []
+    for line in (order_str or "").splitlines():
+        m = _STRUCT_LINE.match(line)
+        if not m:
+            continue
+        idx, tag, text = int(m.group(1)), m.group(2), (m.group(3) or "").strip()
+        out.append((idx, tag, text))
+    return out
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "")).strip().lower()[:120]
+
+
+def _heading_target(src_order_str: str, deliv_order_str: str) -> dict:
+    """Gold heading corrections from the source->delivered tag diff.
+
+    Align elements by visible text; every element whose tag CHANGED in a way that
+    involves a heading (H-level change, or P/Span<->H promotion/demotion) is a
+    correction, keyed by the SOURCE element_index (what the model is shown).
+    """
+    src = _parse_structure_order(src_order_str)
+    deliv = _parse_structure_order(deliv_order_str)
+    # text -> delivered tag (first occurrence wins; skip empty text)
+    deliv_by_text: dict[str, str] = {}
+    for _i, tag, text in deliv:
+        key = _norm(text)
+        if key and key not in deliv_by_text:
+            deliv_by_text[key] = tag
+    findings = []
+    for idx, s_tag, text in src:
+        key = _norm(text)
+        if not key or key not in deliv_by_text:
+            continue
+        d_tag = deliv_by_text[key]
+        if d_tag == s_tag:
+            continue
+        involves_heading = (s_tag in _HEADING_TAGS) or (d_tag in _HEADING_TAGS)
+        if not involves_heading:
+            continue
+        findings.append({
+            "severity": "warning" if {s_tag, d_tag} <= (_HEADING_TAGS | {"P", "Span"}) else "error",
+            "element_index": idx, "current_tag": s_tag,
+            "visible_text": text[:120],
+            "message": f"heading level corrected {s_tag}->{d_tag} in remediation",
+            "correct_tag": d_tag, "suggested_fix": f"Retag as {d_tag}",
+        })
+    return {"status": "fail" if findings else "pass", "findings": findings}
+
+
+def _reemit_with_tag_changes(order_str: str, changes: dict[int, str]) -> str:
+    """Rewrite specific elements' /TAG in a structure-order string (by index)."""
+    out = []
+    for line in (order_str or "").splitlines():
+        m = re.match(r"^(\s*)(\d+)(\.\s+/)(\w+)(.*)$", line)
+        if m and int(m.group(2)) in changes:
+            out.append(f"{m.group(1)}{m.group(2)}{m.group(3)}{changes[int(m.group(2))]}{m.group(5)}")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _heading_corruption_examples(deliv_order: str, parsed, page: int, emit_pass: bool):
+    """CORRUPTION-SYNTHESIS heading examples (sources are untagged, so we can't
+    diff; instead corrupt the DELIVERED gold structure into the 'current' input
+    and target the fix back). Returns [(prompt, target, provenance)].
+
+    Emits 1 fail + 1 pass per page (balanced, applying the v1->v2 lesson):
+      - fail: flatten headings to H1 (the real 'default to H1' trap); for all-H1
+        pages instead demote the top heading (title) to P (title-as-body trap).
+      - pass: the delivered (correct) order -> status=pass.
+    The corrected `correct_tag` in every finding is the human-gold delivered tag.
+    """
+    headings = [(i, t, x) for (i, t, x) in parsed if t in _HEADING_TAGS]
+    if not headings:
+        return []
+    examples = []
+    non_h1 = [(i, t, x) for (i, t, x) in headings if t != "H1"]
+    if non_h1:  # flatten trap
+        changes = {i: "H1" for (i, t, x) in non_h1}
+        findings = [{"severity": "warning", "element_index": i, "current_tag": "H1",
+                     "visible_text": x[:120],
+                     "message": f"heading flattened to H1; visual hierarchy is {t}",
+                     "correct_tag": t, "suggested_fix": f"Retag as {t}"}
+                    for (i, t, x) in non_h1]
+    else:  # title-as-body trap (all headings already H1)
+        i, t, x = headings[0]
+        changes = {i: "P"}
+        findings = [{"severity": "error", "element_index": i, "current_tag": "P",
+                     "visible_text": x[:120],
+                     "message": "title/section heading tagged as body P",
+                     "correct_tag": t, "suggested_fix": f"Retag as {t}"}]
+    corrupted = _reemit_with_tag_changes(deliv_order, changes)
+    examples.append((heading_hierarchy_quality_prompt(logical_order=corrupted),
+                     {"status": "fail", "findings": findings}, "delivered-derived-corrupt"))
+    if emit_pass:
+        examples.append((heading_hierarchy_quality_prompt(logical_order=deliv_order),
+                         {"status": "pass", "findings": []}, "delivered-derived-pass"))
+    return examples
+
+
+def _page_examples(task: str, src: Path, deliv: Path, page: int, emit_pass: bool):
+    """Return [(prompt, target_dict, provenance)] for one page & task (may be empty)."""
+    out = []
+    if task == "alt_text_quality":
+        src_entries = _get_page_figure_alt_entries(src, page)
+        if not src_entries:
+            return out  # production skips figureless pages
+        deliv_entries = _get_page_figure_alt_entries(deliv, page)
+        try:
+            prompt = page_alt_text_quality_prompt(figure_list=_get_page_figure_alt_list(src, page))
+        except Exception:
+            return out
+        out.append((prompt, _alt_target(src_entries, deliv_entries), "delivered-derived"))
+        if emit_pass:
+            pt = _pass_target(deliv_entries)
+            if pt["figures"]:
+                try:
+                    pp = page_alt_text_quality_prompt(figure_list=_get_page_figure_alt_list(deliv, page))
+                    out.append((pp, pt, "delivered-derived-pass"))
+                except Exception:
+                    pass
+    elif task == "heading_hierarchy":
+        # Sources are UNTAGGED (no structure tree), so source<->delivered diff
+        # yields nothing. Use corruption-synthesis from the DELIVERED gold instead
+        # (the source & delivered pages render identically, so the src image is
+        # correct). If the source ever IS tagged with heading structure, the diff
+        # path (_heading_target) is the higher-fidelity signal — prefer it.
+        src_order = _get_page_structure_order(src, page)
+        src_parsed = _parse_structure_order(src_order)
+        if any(t in _HEADING_TAGS for _i, t, _x in src_parsed):
+            deliv_order = _get_page_structure_order(deliv, page)
+            tgt = _heading_target(src_order, deliv_order)
+            out.append((heading_hierarchy_quality_prompt(logical_order=src_order),
+                        tgt, "delivered-derived"))
+            if emit_pass:
+                out.append((heading_hierarchy_quality_prompt(logical_order=deliv_order),
+                            {"status": "pass", "findings": []}, "delivered-derived-pass"))
+            return out
+        deliv_order = _get_page_structure_order(deliv, page)
+        deliv_parsed = _parse_structure_order(deliv_order)
+        out.extend(_heading_corruption_examples(deliv_order, deliv_parsed, page, emit_pass))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--delivered", type=Path, required=True)
@@ -146,13 +321,21 @@ def main() -> int:
     ap.add_argument("--pages-per-doc", type=int, default=4)
     ap.add_argument("--render-dpi", type=int, default=200)
     ap.add_argument("--max-docs", type=int, default=0, help="0 = all")
+    ap.add_argument("--emit-pass-negatives", action="store_true",
+                    help="v2: also emit an 'already-good -> pass' example per page "
+                         "(prompt shows the delivered/good alt as current). Balances "
+                         "pass vs fail so the model learns to discriminate, not "
+                         "always-flag.")
     ap.add_argument("--out", type=Path, default=Path("tools/finetune/data/delivered_alt.jsonl"))
     args = ap.parse_args()
 
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    if tasks != ["alt_text_quality"]:
-        print("v1 implements alt_text_quality only; heading_hierarchy / reading_order are TODO.",
-              file=sys.stderr)
+    supported = {"alt_text_quality", "heading_hierarchy"}
+    bad = [t for t in tasks if t not in supported]
+    if bad:
+        print(f"unsupported task(s) {bad}; supported: {sorted(supported)} "
+              f"(reading_order/contrast still TODO)", file=sys.stderr)
+        tasks = [t for t in tasks if t in supported]
 
     import run_font_residue_batch as R  # word_fidelity gate
 
@@ -162,7 +345,7 @@ def main() -> int:
     renders = args.out.parent / "renders"
     renders.mkdir(parents=True, exist_ok=True)
 
-    n = kept_docs = skipped_lossy = 0
+    n = kept_docs = skipped_lossy = n_pass = 0
     with args.out.open("w", encoding="utf-8") as fh:
         for src, deliv in pairs:
             # gate on fidelity: lossy delivered files are not gold
@@ -182,31 +365,38 @@ def main() -> int:
             except Exception:
                 continue
             for page in range(1, min(args.pages_per_doc, npages) + 1):
-                src_entries = _get_page_figure_alt_entries(src, page)
-                if not src_entries:
-                    continue  # production skips figureless pages
-                deliv_entries = _get_page_figure_alt_entries(deliv, page)
-                target = _alt_target(src_entries, deliv_entries)
                 png = renders / f"{doc_id}_p{page}_{args.render_dpi}dpi.png"
-                try:
-                    tmp = render_page_to_image(src, page, dpi=args.render_dpi)
-                    Path(tmp).replace(png)
-                    prompt = page_alt_text_quality_prompt(
-                        figure_list=_get_page_figure_alt_list(src, page))
-                except Exception as e:
-                    print(f"  {doc_id} p{page}: {e}", file=sys.stderr)
-                    continue
-                fh.write(json.dumps({
-                    "doc_id": doc_id, "page": page, "task": "alt_text_quality",
-                    "image": str(png.resolve()), "prompt": prompt,
-                    "draft_target": "", "target": json.dumps(target, ensure_ascii=False),
-                    "reviewed": True, "provenance": "delivered-derived",
-                    "source_pdf": str(src.resolve()), "delivered_pdf": str(deliv.resolve()),
-                }, ensure_ascii=False) + "\n")
-                n += 1
+                rendered = png.exists()
+                for task in tasks:
+                    try:
+                        examples = _page_examples(task, src, deliv, page, args.emit_pass_negatives)
+                    except Exception as e:
+                        print(f"  {doc_id} p{page} {task}: {e}", file=sys.stderr)
+                        continue
+                    if not examples:
+                        continue
+                    if not rendered:
+                        try:
+                            tmp = render_page_to_image(src, page, dpi=args.render_dpi)
+                            Path(tmp).replace(png)
+                            rendered = True
+                        except Exception as e:
+                            print(f"  {doc_id} p{page}: render {e}", file=sys.stderr)
+                            break
+                    for prompt, target, prov in examples:
+                        fh.write(json.dumps({
+                            "doc_id": doc_id, "page": page, "task": task,
+                            "image": str(png.resolve()), "prompt": prompt,
+                            "draft_target": "", "target": json.dumps(target, ensure_ascii=False),
+                            "reviewed": True, "provenance": prov,
+                            "source_pdf": str(src.resolve()), "delivered_pdf": str(deliv.resolve()),
+                        }, ensure_ascii=False) + "\n")
+                        n += 1
+                        if prov.endswith("-pass"):
+                            n_pass += 1
 
-    print(f"paired={len(pairs)} kept_clean={kept_docs} skipped_lossy={skipped_lossy} "
-          f"-> {n} alt-text training records at {args.out}")
+    print(f"paired={len(pairs)} kept_clean={kept_docs} skipped_lossy={skipped_lossy} tasks={tasks} "
+          f"-> {n} training records ({n_pass} 'already-good' pass negatives) at {args.out}")
     print("VALIDATE a sample of `target` before training. Then finalize_dataset.py "
           "(no --use-drafts-as-target; these are already reviewed=true gold).")
     return 0
