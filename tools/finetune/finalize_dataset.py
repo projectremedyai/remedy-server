@@ -18,6 +18,7 @@ verify the 4080 loop end-to-end. Never ship a model trained this way.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -72,7 +73,8 @@ def main() -> int:
     # straddles train/val across rebuilds.
     def _bucket(m):
         key = f"{m['meta']['doc_id']}|{m['meta']['page']}|{m['meta']['task']}"
-        return (sum(map(ord, key)) % 1000) / 1000.0
+        digest = hashlib.sha256(key.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") / float(2**64)
 
     val = [r for r in rows if _bucket(r) < args.val_frac]
     train = [r for r in rows if _bucket(r) >= args.val_frac]

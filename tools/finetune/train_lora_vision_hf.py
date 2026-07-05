@@ -60,6 +60,26 @@ def _load_rows(path: Path) -> list[dict]:
     return rows
 
 
+def _bnb_config(qlora: bool):
+    """4-bit NF4 quantization config for QLoRA, or None for bf16.
+
+    Returning None keeps the bf16 base load unchanged. The QLoRA A/B should
+    differ only in base-weight precision: 4-bit NF4 with double quantization,
+    while compute and LoRA stay bf16.
+    """
+    if not qlora:
+        return None
+    import torch
+    from transformers import BitsAndBytesConfig
+
+    return BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+
+
 def _lora_targets(model, tune_vision: bool) -> list[str]:
     """Exact Linear module names to LoRA — language tower only by default."""
     import torch.nn as nn
@@ -169,6 +189,10 @@ def main() -> int:
     ap.add_argument("--max-pixels", type=int, default=1280 * 28 * 28,
                     help="Cap image tokens to bound sequence length / memory.")
     ap.add_argument("--tune-vision-layers", action="store_true")
+    ap.add_argument("--qlora", action="store_true",
+                    help="Load the base in 4-bit NF4 with bitsandbytes. "
+                         "Use only for QLoRA experiments on smaller GPUs; the "
+                         "ship path remains bf16 unless the A/B fully matches.")
     args = ap.parse_args()
 
     import torch
@@ -177,14 +201,26 @@ def main() -> int:
     from peft import LoraConfig, get_peft_model
 
     dev = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU!"
-    print(f"[train-hf] model={args.model} rank={args.rank} bf16=True device={dev}")
+    mode = "qlora-4bit" if args.qlora else "bf16"
+    print(f"[train-hf] model={args.model} rank={args.rank} base={mode} device={dev}")
 
     processor = AutoProcessor.from_pretrained(
         args.model, max_pixels=args.max_pixels, use_fast=True)
-    model = AutoModelForImageTextToText.from_pretrained(
-        args.model, dtype=torch.bfloat16, device_map="cuda",
-        attn_implementation="sdpa")
-    model.config.use_cache = False
+    quant = _bnb_config(args.qlora)
+    if quant is not None:
+        from peft import prepare_model_for_kbit_training
+
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.model, quantization_config=quant, device_map="auto",
+            attn_implementation="sdpa")
+        model.config.use_cache = False
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True)
+    else:
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.model, dtype=torch.bfloat16, device_map="cuda",
+            attn_implementation="sdpa")
+        model.config.use_cache = False
 
     targets = _lora_targets(model, args.tune_vision_layers)
     print(f"[train-hf] LoRA on {len(targets)} Linear modules "

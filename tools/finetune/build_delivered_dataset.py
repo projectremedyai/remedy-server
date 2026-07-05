@@ -56,6 +56,7 @@ from project_remedy.pdf_vision import (  # noqa: E402
 from project_remedy.vision_prompts import (  # noqa: E402
     heading_hierarchy_quality_prompt,
     page_alt_text_quality_prompt,
+    reading_order_prompt,
     wcag_table_verify_prompt,
 )
 
@@ -312,6 +313,55 @@ def _table_corruption_examples(deliv_order: str, parsed, emit_pass: bool):
     return out
 
 
+def _reading_order_corruption_examples(deliv_order: str, parsed, emit_pass: bool):
+    """CORRUPTION-SYNTHESIS reading-order examples.
+
+    Delivered files are the gold order. Corrupt by moving the latter content
+    region before the first region, mirroring the common multi-column/sidebar
+    failure mode where the structure tree starts in the wrong visual region.
+    """
+    deliv_order = _cap_order(deliv_order)
+    lines = [line for line in deliv_order.splitlines() if line.strip()]
+    parsed = _parse_structure_order(deliv_order)
+    content = [(idx, tag, text) for idx, tag, text in parsed if tag not in {"Document", "Sect"}]
+    if len(lines) < 6 or len(content) < 4:
+        return []
+
+    pivot = max(2, len(lines) // 2)
+    corrupted_lines = lines[pivot:] + lines[:pivot]
+    corrupted = "\n".join(corrupted_lines)
+    if corrupted == deliv_order:
+        return []
+
+    has_table = any(tag in {"Table", "TR", "TH", "TD"} for _idx, tag, _text in parsed)
+    page_layout = "table_directory" if has_table else "unknown_complex"
+    correct_order = [idx for idx, _tag, _text in content]
+    findings = [{
+        "severity": "error",
+        "description": (
+            "The tagged reading order starts in a later visual region before "
+            "earlier body content, which can make columns, sidebars, or tables "
+            "read out of sequence."
+        ),
+        "suggestion": "Restore the delivered gold reading order: "
+                      + ", ".join(map(str, correct_order[:40])),
+    }]
+    out = [(
+        reading_order_prompt(structure_order=corrupted),
+        {"page_layout": page_layout, "issues": findings,
+         "summary": "Reading order is corrupted; restore the delivered structure-tree order."},
+        "delivered-derived-reading-order-corrupt",
+    )]
+    if emit_pass:
+        out.append((
+            reading_order_prompt(structure_order=deliv_order),
+            {"page_layout": page_layout, "issues": [],
+             "summary": "Reading order matches the delivered gold structure."},
+            "delivered-derived-reading-order-pass",
+        ))
+    return out
+
+
 def _page_examples(task: str, src: Path, deliv: Path, page: int, emit_pass: bool):
     """Return [(prompt, target_dict, provenance)] for one page & task (may be empty)."""
     out = []
@@ -359,6 +409,10 @@ def _page_examples(task: str, src: Path, deliv: Path, page: int, emit_pass: bool
         deliv_order = _get_page_structure_order(deliv, page)
         deliv_parsed = _parse_structure_order(deliv_order)
         out.extend(_table_corruption_examples(deliv_order, deliv_parsed, emit_pass))
+    elif task == "reading_order":
+        deliv_order = _get_page_structure_order(deliv, page)
+        deliv_parsed = _parse_structure_order(deliv_order)
+        out.extend(_reading_order_corruption_examples(deliv_order, deliv_parsed, emit_pass))
     return out
 
 
@@ -382,11 +436,11 @@ def main() -> int:
     args = ap.parse_args()
 
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    supported = {"alt_text_quality", "heading_hierarchy", "table_structure"}
+    supported = {"alt_text_quality", "heading_hierarchy", "table_structure", "reading_order"}
     bad = [t for t in tasks if t not in supported]
     if bad:
         print(f"unsupported task(s) {bad}; supported: {sorted(supported)} "
-              f"(reading_order/contrast still TODO)", file=sys.stderr)
+              f"(contrast still TODO)", file=sys.stderr)
         tasks = [t for t in tasks if t in supported]
 
     import run_font_residue_batch as R  # word_fidelity gate

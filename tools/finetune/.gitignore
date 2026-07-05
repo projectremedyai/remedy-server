@@ -1,5 +1,6 @@
 # Local dataset builds and training outputs — the dataset lives on HF, not in git.
 data/
+data_*/
 outputs/
 out/
 *.jsonl
