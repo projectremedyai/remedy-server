@@ -162,6 +162,18 @@ def _pass_target(delivered_entries) -> dict:
 
 _HEADING_TAGS = {"H1", "H2", "H3", "H4", "H5", "H6"}
 _STRUCT_LINE = re.compile(r'^\s*(\d+)\.\s+/(\w+)(?:\s+\(text:\s*"(.*?)"\))?', re.S)
+# Cap the structure-order text fed to the prompt. Big tables produce hundreds of
+# TD lines -> huge sequences that blow up training memory (OOM/thrash on the 32B)
+# and add nothing the page image doesn't already show. 60 lines keeps the header
+# rows + enough context to judge structure.
+_MAX_ORDER_LINES = 60
+
+
+def _cap_order(order_str: str, max_lines: int = _MAX_ORDER_LINES) -> str:
+    lines = (order_str or "").splitlines()
+    if len(lines) <= max_lines:
+        return order_str
+    return "\n".join(lines[:max_lines] + [f"    ... (+{len(lines) - max_lines} more elements)"])
 
 
 def _parse_structure_order(order_str: str) -> list[tuple[int, str, str]]:
@@ -276,6 +288,8 @@ def _table_corruption_examples(deliv_order: str, parsed, emit_pass: bool):
     Pass = the correct delivered structure. Renders the src image (identical).
     Returns [(prompt, target, provenance)].
     """
+    deliv_order = _cap_order(deliv_order)  # bound sequence length (big tables OOM)
+    parsed = _parse_structure_order(deliv_order)
     has_table = any(t in {"Table", "TH", "TD"} for (_i, t, _x) in parsed)
     th_cells = [(i, t, x) for (i, t, x) in parsed if t == "TH"]
     if not has_table or not th_cells:
