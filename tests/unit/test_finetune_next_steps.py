@@ -540,3 +540,103 @@ def test_run_vision_eval_passes_task_to_provider(tmp_path):
     }]
     assert results[0]["json_valid"] is True
     assert results[0]["severity_score"] == 2.0
+
+
+def test_router_readiness_combines_adapter_and_metric_gates(tmp_path):
+    readiness = load_tool("eval_router_readiness")
+    main_repo = tmp_path / "main"
+    eval_dir = tmp_path / "eval"
+    eval_dir.mkdir()
+    table_metrics = tmp_path / "table.metrics.json"
+    prod_metrics = tmp_path / "production.task_metrics.json"
+    alt_summary = tmp_path / "alt.summary.json"
+
+    adapter_paths = [
+        main_repo / "artifacts/lamc-qwen3vl-32b-lora-v2",
+        main_repo / "artifacts/lamc-qwen3vl-32b-table-lora",
+        tmp_path / "outputs_runpod/lamc-qwen3vl-32b-contrast-lora",
+        tmp_path / "outputs_runpod/lamc-qwen3vl-32b-reading-order-lora",
+        tmp_path / "outputs_runpod/lamc-qwen3vl-32b-heading-lora",
+    ]
+    for path in adapter_paths:
+        path.mkdir(parents=True)
+        (path / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (path / "adapter_model.safetensors").write_text("weights", encoding="utf-8")
+
+    alt_summary.write_text(json.dumps({
+        "valid_json_rate": 0.902,
+        "gold_vs_bad_discrimination": {
+            "alt_text_quality": {
+                "win_rate": 0.9333,
+                "gold_flagged_more": 0,
+            }
+        },
+    }), encoding="utf-8")
+    table_metrics.write_text(json.dumps({
+        "by_task": {
+            "table_structure": {
+                "status_accuracy": 1.0,
+                "valid_json_rate": 1.0,
+                "pass_false_positive_rate": 0.0,
+            }
+        }
+    }), encoding="utf-8")
+    (eval_dir / "contrast.tuned.metrics.json").write_text(json.dumps({
+        "by_task": {
+            "contrast": {
+                "status_accuracy": 1.0,
+                "near_threshold_status_accuracy": 1.0,
+                "valid_json_rate": 1.0,
+                "pass_false_positive_rate": 0.0,
+            }
+        }
+    }), encoding="utf-8")
+    (eval_dir / "reading_order.tuned.metrics.json").write_text(json.dumps({
+        "by_task": {
+            "reading_order": {
+                "status_accuracy": 1.0,
+                "valid_json_rate": 1.0,
+                "pass_false_positive_rate": 0.0,
+            }
+        }
+    }), encoding="utf-8")
+    (eval_dir / "heading.tuned.metrics.json").write_text(json.dumps({
+        "by_task": {
+            "heading_hierarchy": {
+                "status_accuracy": 1.0,
+                "exact_correction_accuracy": 0.8857,
+                "valid_json_rate": 1.0,
+                "pass_false_positive_rate": 0.0,
+            }
+        }
+    }), encoding="utf-8")
+    prod_metrics.write_text(json.dumps({
+        "corpus_checks": {
+            "contrast": {"current_production_corpus_is_valid_gate": False}
+        },
+        "model_alias_semantics": {"stable_current_alias": "qwen3vl-32b-remedy"},
+        "recommendation": {"decision": "gather_better_eval_data_first"},
+    }), encoding="utf-8")
+    args = types.SimpleNamespace(
+        eval_dir=eval_dir,
+        main_repo=main_repo,
+        alt_summary=alt_summary,
+        table_metrics=table_metrics,
+        production_task_metrics=prod_metrics,
+        alt_adapter=None,
+        table_adapter=None,
+        contrast_adapter=tmp_path / "outputs_runpod/lamc-qwen3vl-32b-contrast-lora",
+        reading_order_adapter=tmp_path / "outputs_runpod/lamc-qwen3vl-32b-reading-order-lora",
+        heading_adapter=tmp_path / "outputs_runpod/lamc-qwen3vl-32b-heading-lora",
+    )
+
+    summary = readiness.build_summary(args)
+
+    assert summary["decision"] == "ready_for_live_router_smoke"
+    assert summary["final_ship_ready"] is False
+    assert all(item["passed"] for item in summary["adapters"])
+    assert all(
+        item["passed"]
+        for gates in summary["task_gates"].values()
+        for item in gates
+    )
