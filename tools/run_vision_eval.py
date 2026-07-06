@@ -101,7 +101,10 @@ async def _run_records(records, provider, parse_json, args, out_fh) -> list[dict
             t0 = time.perf_counter()
             try:
                 response = await provider.analyze_image(
-                    image, rec["prompt"], response_format=response_format
+                    image,
+                    rec["prompt"],
+                    response_format=response_format,
+                    task=rec["task"],
                 )
                 result["latency_s"] = round(time.perf_counter() - t0, 3)
                 parsed = parse_json(response)

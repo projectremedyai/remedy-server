@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import json
 import sys
 import types
@@ -14,6 +15,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def load_tool(name: str):
     path = ROOT / "tools" / "finetune" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_repo_tool(name: str):
+    path = ROOT / "tools" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -471,3 +482,61 @@ def test_remedy_router_vllm_command_and_env_profile(tmp_path):
     assert "OLLAMA_VISION_MODEL=qwen3vl-32b-remedy" in env
     assert "contrast:qwen3vl-32b-remedy-contrast-v1" in env
     assert "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK=0" in env
+
+
+def test_run_vision_eval_passes_task_to_provider(tmp_path):
+    runner = load_repo_tool("run_vision_eval")
+    eval_path = tmp_path / "eval.jsonl"
+    (tmp_path / "page.png").write_bytes(b"fake")
+    records = [{
+        "example_id": "doc_bad_p1_contrast",
+        "doc_id": "doc",
+        "task": "contrast",
+        "variant": "bad",
+        "page_index": 1,
+        "image": "page.png",
+        "prompt": "Find contrast issues",
+    }]
+
+    class RecordingProvider:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def analyze_image(
+            self,
+            image_path,
+            prompt,
+            *,
+            response_format=None,
+            task=None,
+        ):
+            self.calls.append({
+                "image_path": image_path,
+                "prompt": prompt,
+                "response_format": response_format,
+                "task": task,
+            })
+            return '{"issues":[{"severity":"error"}]}'
+
+    provider = RecordingProvider()
+    args = types.SimpleNamespace(
+        concurrency=1,
+        response_format=True,
+        eval=eval_path,
+        model_label="router",
+    )
+    out_path = tmp_path / "results.jsonl"
+
+    with out_path.open("w", encoding="utf-8") as out_fh:
+        results = asyncio.run(
+            runner._run_records(records, provider, json.loads, args, out_fh)
+        )
+
+    assert provider.calls == [{
+        "image_path": tmp_path / "page.png",
+        "prompt": "Find contrast issues",
+        "response_format": {"type": "json_object"},
+        "task": "contrast",
+    }]
+    assert results[0]["json_valid"] is True
+    assert results[0]["severity_score"] == 2.0
