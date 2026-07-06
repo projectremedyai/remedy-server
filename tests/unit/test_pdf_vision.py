@@ -14,6 +14,7 @@ import httpx
 import pytest
 from types import SimpleNamespace
 
+from project_remedy.config import load_config
 from project_remedy.pdf_vision import (
     EmptyVisionResponse,
     OllamaVisionProvider,
@@ -328,3 +329,49 @@ def test_provider_config_rejects_task_base_url_without_model(monkeypatch):
 
     with pytest.raises(ValueError, match="without models: heading_hierarchy"):
         create_provider_from_config(config)
+
+
+def test_env_file_can_configure_task_router(tmp_path, monkeypatch):
+    for name in (
+        "OLLAMA_API_KEY",
+        "OLLAMA_BASE_URL",
+        "VISION_BASE_URL",
+        "OLLAMA_VISION_MODEL",
+        "OLLAMA_VISION_TASK_MODELS",
+        "OLLAMA_VISION_TASK_BASE_URLS",
+        "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join([
+            "OLLAMA_API_KEY=dummy",
+            "VISION_BASE_URL=http://primary.test/v1",
+            "OLLAMA_VISION_MODEL=qwen3vl-32b-remedy",
+            (
+                "OLLAMA_VISION_TASK_MODELS="
+                "contrast:qwen3vl-32b-remedy-contrast-v1,"
+                "reading_order:qwen3vl-32b-remedy-reading-order-v1,"
+                "heading_hierarchy:qwen3vl-32b-remedy-heading-v1,"
+                "table_structure:qwen3vl-32b-remedy-table-v1"
+            ),
+            (
+                "OLLAMA_VISION_TASK_BASE_URLS="
+                "contrast:http://contrast.test/v1,"
+                "table_structure:http://table.test/v1"
+            ),
+            "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK=0",
+        ]),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_path, yaml_path=tmp_path / "missing.yaml")
+    provider = create_provider_from_config(config)
+
+    assert isinstance(provider, TaskRoutedVisionProvider)
+    assert provider.allow_fallback is False
+    assert provider.primary.model == "qwen3vl-32b-remedy"
+    assert provider.primary.base_url == "http://primary.test/v1"
+    assert provider.task_providers["contrast"].model == "qwen3vl-32b-remedy-contrast-v1"
+    assert provider.task_providers["contrast"].base_url == "http://contrast.test/v1"
+    assert provider.task_providers["reading_order"].base_url == "http://primary.test/v1"
