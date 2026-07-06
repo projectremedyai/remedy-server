@@ -346,6 +346,47 @@ def _should_skip_page(hints: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def _criterion_findings(items: object) -> list[CriterionFinding]:
+    findings: list[CriterionFinding] = []
+    if not isinstance(items, list):
+        return findings
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        findings.append(CriterionFinding(
+            issue_id=str(item.get("issue_id", "")),
+            severity=str(item.get("severity", "warning")),
+            message=str(item.get("message", "")),
+            suggested_fix=str(item.get("suggested_fix", "")),
+            fixer=str(item.get("fixer", "")),
+        ))
+    return findings
+
+
+def _criterion_from_task_response(
+    parsed: object,
+    *,
+    wcag_sc: list[str],
+    fallback_summary: str,
+) -> CriterionResult:
+    if not isinstance(parsed, dict):
+        return CriterionResult(
+            applicable=True,
+            status="manual_review",
+            wcag_sc=wcag_sc,
+            confidence=0.0,
+            summary=f"{fallback_summary} — unparseable model response",
+        )
+    return CriterionResult(
+        applicable=True,
+        status=str(parsed.get("status", "manual_review")),
+        wcag_sc=wcag_sc,
+        confidence=float(parsed.get("confidence", 0.0) or 0.0),
+        summary=str(parsed.get("summary", fallback_summary)),
+        findings=_criterion_findings(parsed.get("findings", [])),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Core verifier
 # ---------------------------------------------------------------------------
@@ -568,7 +609,11 @@ class WCAGVisionVerifier:
     ) -> WCAGPageResult:
         """Run focused verification prompts based on triage results."""
         from project_remedy.pdf_vision import render_page_to_image, _parse_json_response
-        from project_remedy.vision_prompts import wcag_core_layout_verify_prompt
+        from project_remedy.vision_prompts import (
+            wcag_contrast_verify_prompt,
+            wcag_core_layout_verify_prompt,
+            wcag_table_verify_prompt,
+        )
 
         criteria: dict[str, CriterionResult] = {}
         page_result = WCAGPageResult(
@@ -591,11 +636,19 @@ class WCAGVisionVerifier:
             needs_figures = _fq & {"figures", "alt_text_accuracy"}
             needs_tables = _fq & {"tables", "table_structure"}
             needs_contrast = _fq & {"contrast", "color_contrast"}
+            logical_order: str | None = None
+            heading_context: str | None = None
+
+            def _structure_context() -> tuple[str, str]:
+                nonlocal logical_order, heading_context
+                if logical_order is None or heading_context is None:
+                    logical_order, heading_context = _extract_page_structure_context(
+                        pdf_path, page_idx,
+                    )
+                return logical_order, heading_context
 
             if needs_layout:
-                logical_order, heading_context = _extract_page_structure_context(
-                    pdf_path, page_idx,
-                )
+                logical_order, heading_context = _structure_context()
                 prompt = wcag_core_layout_verify_prompt(
                     logical_order=logical_order,
                     heading_context=heading_context,
@@ -613,15 +666,6 @@ class WCAGVisionVerifier:
                 if isinstance(parsed, dict):
                     for crit_key in ("headings", "reading_order"):
                         crit_data = parsed.get(crit_key, {})
-                        findings = []
-                        for f in crit_data.get("findings", []):
-                            findings.append(CriterionFinding(
-                                issue_id=f.get("issue_id", ""),
-                                severity=f.get("severity", "warning"),
-                                message=f.get("message", ""),
-                                suggested_fix=f.get("suggested_fix", ""),
-                                fixer=f.get("fixer", ""),
-                            ))
                         wcag_map = {
                             "headings": ["1.3.1", "2.4.6"],
                             "reading_order": ["1.3.1", "1.3.2"],
@@ -632,7 +676,7 @@ class WCAGVisionVerifier:
                             wcag_sc=wcag_map.get(crit_key, []),
                             confidence=crit_data.get("confidence", 0.5),
                             summary=crit_data.get("summary", ""),
-                            findings=findings,
+                            findings=_criterion_findings(crit_data.get("findings", [])),
                         )
 
             # Alt text verification
@@ -649,22 +693,33 @@ class WCAGVisionVerifier:
 
             # Table verification
             if needs_tables:
-                criteria["table_structure"] = CriterionResult(
-                    applicable=True,
-                    status="pass",
+                table_structure, _ = _structure_context()
+                async with vision_sem:
+                    response = await self.vision_provider.analyze_image(
+                        image_path,
+                        wcag_table_verify_prompt(table_structure),
+                        task="table_structure",
+                    )
+                parsed = _parse_json_response(response or "")
+                criteria["table_structure"] = _criterion_from_task_response(
+                    parsed,
                     wcag_sc=["1.3.1"],
-                    confidence=0.5,
-                    summary="Table structure verification — pending implementation",
+                    fallback_summary="Table structure verification",
                 )
 
             # Contrast verification
             if needs_contrast:
-                criteria["color_contrast"] = CriterionResult(
-                    applicable=True,
-                    status="pass",
+                async with vision_sem:
+                    response = await self.vision_provider.analyze_image(
+                        image_path,
+                        wcag_contrast_verify_prompt(),
+                        task="contrast",
+                    )
+                parsed = _parse_json_response(response or "")
+                criteria["color_contrast"] = _criterion_from_task_response(
+                    parsed,
                     wcag_sc=["1.4.3", "1.4.1"],
-                    confidence=0.5,
-                    summary="Contrast verification — pending implementation",
+                    fallback_summary="Contrast verification",
                 )
 
         except Exception as exc:

@@ -271,6 +271,134 @@ def test_eval_metrics_prefers_same_order_predictions_for_duplicate_keys(tmp_path
     assert summary["by_task"]["table_structure"]["status_accuracy"] == 1.0
 
 
+def test_production_task_metrics_marks_contrast_corpus_as_non_gate(tmp_path):
+    prod = load_tool("eval_production_task_metrics")
+    renders = tmp_path / "renders"
+    renders.mkdir()
+    Image.new("RGB", (20, 20), (255, 255, 255)).save(renders / "gold.png")
+    Image.new("RGB", (20, 20), (255, 255, 255)).save(renders / "bad.png")
+    eval_rows = [
+        {
+            "example_id": "d_gold_p1_contrast",
+            "doc_id": "d",
+            "page_index": 1,
+            "variant": "gold",
+            "task": "contrast",
+            "image": "renders/gold.png",
+            "relevant_dimension": None,
+        },
+        {
+            "example_id": "d_bad_p1_contrast",
+            "doc_id": "d",
+            "page_index": 1,
+            "variant": "bad",
+            "task": "contrast",
+            "image": "renders/bad.png",
+            "relevant_dimension": None,
+        },
+    ]
+    results = [
+        {**row, "response": "{\"issues\": []}"}
+        for row in eval_rows
+    ]
+
+    summary, _samples = prod.build_summary(
+        eval_rows,
+        results,
+        eval_dir=tmp_path,
+        contrast_gate_metrics={"status_accuracy": 1.0},
+    )
+
+    contrast = summary["tasks"]["contrast"]
+    assert contrast["gate_applicability"] == "not_applicable_current_production_corpus"
+    assert contrast["verified_contrast_gate_metrics"] == {"status_accuracy": 1.0}
+    assert summary["corpus_checks"]["contrast"]["current_production_corpus_is_valid_gate"] is False
+
+
+def test_production_task_metrics_scores_reading_order_current_schema():
+    prod = load_tool("eval_production_task_metrics")
+    eval_rows = [
+        {
+            "example_id": "d_gold_p1_reading_order",
+            "doc_id": "d",
+            "page_index": 1,
+            "variant": "gold",
+            "task": "reading_order",
+            "prompt_inputs": {"structure_order": "  1. /P"},
+        },
+        {
+            "example_id": "d_bad_p1_reading_order",
+            "doc_id": "d",
+            "page_index": 1,
+            "variant": "bad",
+            "task": "reading_order",
+            "prompt_inputs": {"structure_order": "  1. /P"},
+        },
+    ]
+    results = [
+        {**eval_rows[0], "response": "{\"page_layout\":\"single_column\",\"issues\":[],\"summary\":\"ok\"}"},
+        {**eval_rows[1], "response": "{\"page_layout\":\"single_column\",\"issues\":[],\"summary\":\"ok\"}"},
+    ]
+
+    summary, samples = prod.build_summary(
+        eval_rows,
+        results,
+        eval_dir=Path("."),
+        compute_image_delta=False,
+    )
+
+    reading = summary["tasks"]["reading_order"]
+    assert reading["schema"] == "page_layout + issues + summary"
+    assert reading["empty_issues_means_pass"] is True
+    assert reading["corrected_order_required"] is False
+    assert reading["corrected_order_accuracy"] is None
+    assert reading["miss_counts"]["bad_not_flagged"] == 1
+    assert any(sample["sample_type"] == "reading_order_bad_not_flagged" for sample in samples)
+
+
+def test_production_task_metrics_classifies_heading_gold_flags_from_logical_order():
+    prod = load_tool("eval_production_task_metrics")
+    source = {
+        "example_id": "d_gold_p1_heading_hierarchy",
+        "doc_id": "d",
+        "page_index": 1,
+        "variant": "gold",
+        "task": "heading_hierarchy",
+        "prompt_inputs": {"logical_order": "  1.   /Document\n  2.       /LI"},
+    }
+    result = {
+        **source,
+        "response": json.dumps({
+            "status": "fail",
+            "findings": [
+                {
+                    "severity": "warning",
+                    "element_index": 2,
+                    "current_tag": "LI",
+                    "visible_text": "Program Review",
+                    "correct_tag": "H1",
+                }
+            ],
+        }),
+    }
+
+    summary, samples = prod.build_summary(
+        [source],
+        [result],
+        eval_dir=Path("."),
+        compute_image_delta=False,
+    )
+
+    heading = summary["tasks"]["heading_hierarchy"]
+    assert heading["gold_flagged_pages"] == 1
+    assert heading["gold_flag_classification_counts"] == {
+        "likely_true_residual_structure_issue": 1
+    }
+    assert samples[0]["classified_findings"][0]["classification"]["classification"] == (
+        "likely_true_residual_structure_issue"
+    )
+
+
 def test_train_lora_init_adapter_loads_existing_adapter_as_trainable(monkeypatch, tmp_path):
     trainer = load_tool("train_lora_vision_hf")
     calls = {}

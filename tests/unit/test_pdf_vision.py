@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from types import SimpleNamespace
 
 from project_remedy.pdf_vision import (
     EmptyVisionResponse,
     OllamaVisionProvider,
     TaskRoutedVisionProvider,
+    create_provider_from_config,
     _parse_task_provider_map,
 )
 
@@ -262,3 +264,67 @@ async def test_task_routed_provider_fallback_is_opt_in():
 
     assert await provider.analyze_image(None, "prompt", task="contrast") == "primary:contrast"
     assert [call["task"] for call in primary.calls] == ["contrast"]
+
+
+def test_provider_config_builds_full_env_task_router(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_VISION_TASK_MODELS",
+        ",".join([
+            "contrast:qwen3vl-32b-remedy-contrast-v1",
+            "reading_order:qwen3vl-32b-remedy-reading-order-v1",
+            "heading-hierarchy:qwen3vl-32b-remedy-heading-v1",
+            "table_structure:qwen3vl-32b-remedy-table-v1",
+        ]),
+    )
+    monkeypatch.setenv(
+        "OLLAMA_VISION_TASK_BASE_URLS",
+        "contrast:http://contrast.test/v1,table_structure:http://table.test/v1",
+    )
+    monkeypatch.delenv("OLLAMA_VISION_ROUTER_ALLOW_FALLBACK", raising=False)
+    config = SimpleNamespace(
+        api=SimpleNamespace(
+            api_key="dummy",
+            base_url="http://primary.test/v1",
+            vision_base_url="http://primary.test/v1",
+            vision_cluster_nodes=[],
+            vision_model="qwen3vl-32b-remedy",
+            ollama_stream=False,
+            ollama_reasoning_effort="low",
+        )
+    )
+
+    provider = create_provider_from_config(config)
+
+    assert isinstance(provider, TaskRoutedVisionProvider)
+    assert provider.allow_fallback is False
+    assert provider.primary.model == "qwen3vl-32b-remedy"
+    assert provider.task_providers["contrast"].model == "qwen3vl-32b-remedy-contrast-v1"
+    assert provider.task_providers["contrast"].base_url == "http://contrast.test/v1"
+    assert provider.task_providers["reading_order"].model == (
+        "qwen3vl-32b-remedy-reading-order-v1"
+    )
+    assert provider.task_providers["reading_order"].base_url == "http://primary.test/v1"
+    assert provider.task_providers["heading_hierarchy"].model == (
+        "qwen3vl-32b-remedy-heading-v1"
+    )
+    assert provider.task_providers["table_structure"].model == "qwen3vl-32b-remedy-table-v1"
+    assert provider.task_providers["table_structure"].base_url == "http://table.test/v1"
+
+
+def test_provider_config_rejects_task_base_url_without_model(monkeypatch):
+    monkeypatch.setenv("OLLAMA_VISION_TASK_MODELS", "contrast:qwen3vl-32b-remedy-contrast-v1")
+    monkeypatch.setenv("OLLAMA_VISION_TASK_BASE_URLS", "heading_hierarchy:http://heading.test/v1")
+    config = SimpleNamespace(
+        api=SimpleNamespace(
+            api_key="dummy",
+            base_url="http://primary.test/v1",
+            vision_base_url="",
+            vision_cluster_nodes=[],
+            vision_model="qwen3vl-32b-remedy",
+            ollama_stream=False,
+            ollama_reasoning_effort="low",
+        )
+    )
+
+    with pytest.raises(ValueError, match="without models: heading_hierarchy"):
+        create_provider_from_config(config)
