@@ -433,3 +433,41 @@ def test_train_lora_init_adapter_loads_existing_adapter_as_trainable(monkeypatch
         "path": str(adapter_dir),
         "is_trainable": True,
     }
+
+
+def test_remedy_router_vllm_command_and_env_profile(tmp_path):
+    serve = load_tool("serve_remedy_router_vllm")
+    adapter_dirs = [
+        "artifacts/lamc-qwen3vl-32b-lora-v2",
+        "artifacts/lamc-qwen3vl-32b-table-lora",
+        "outputs_runpod/lamc-qwen3vl-32b-contrast-lora",
+        "outputs_runpod/lamc-qwen3vl-32b-reading-order-lora",
+        "outputs_runpod/lamc-qwen3vl-32b-heading-lora",
+    ]
+    for rel in adapter_dirs:
+        path = tmp_path / rel
+        path.mkdir(parents=True)
+        (path / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+    args = serve.parse_args([
+        "--adapter-root", str(tmp_path),
+        "--python", "/workspace/ft/bin/python",
+        "--dry-run",
+    ])
+    modules = serve.adapter_modules(args)
+    command = serve.build_command(args)
+
+    assert serve.missing_adapters(modules) == []
+    assert "--enable-lora" in command
+    assert command[command.index("--lora-modules") + 1:] == [
+        f"qwen3vl-32b-remedy={tmp_path / 'artifacts/lamc-qwen3vl-32b-lora-v2'}",
+        f"qwen3vl-32b-remedy-alt-v2={tmp_path / 'artifacts/lamc-qwen3vl-32b-lora-v2'}",
+        f"qwen3vl-32b-remedy-table-v1={tmp_path / 'artifacts/lamc-qwen3vl-32b-table-lora'}",
+        f"qwen3vl-32b-remedy-contrast-v1={tmp_path / 'outputs_runpod/lamc-qwen3vl-32b-contrast-lora'}",
+        f"qwen3vl-32b-remedy-reading-order-v1={tmp_path / 'outputs_runpod/lamc-qwen3vl-32b-reading-order-lora'}",
+        f"qwen3vl-32b-remedy-heading-v1={tmp_path / 'outputs_runpod/lamc-qwen3vl-32b-heading-lora'}",
+    ]
+    env = serve.router_env("http://router.test/v1")
+    assert "OLLAMA_VISION_MODEL=qwen3vl-32b-remedy" in env
+    assert "contrast:qwen3vl-32b-remedy-contrast-v1" in env
+    assert "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK=0" in env
