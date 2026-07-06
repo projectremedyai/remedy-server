@@ -17,6 +17,9 @@ build
 tests
 docs
 benchmarks
+artifacts
+eval_runs
+graphify-out
 exports
 output
 reports
@@ -26,6 +29,10 @@ tmp
 job_data
 jobs.db*
 pipeline.db*
+.local-archive
+tools/finetune
+tools/corpus_annotations/v2_export
+tools/corpus_annotations/v2_real_eval
 
 # Editor / OS noise
 .vscode

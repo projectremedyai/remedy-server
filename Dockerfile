@@ -3,11 +3,12 @@
 # Multi-stage Dockerfile for remedy-server.
 # Builds a single image that includes every external binary the API's
 # optional endpoints need: Ghostscript, veraPDF (+ Java), ocrmypdf,
-# Typst (rebuild backend), Node + pa11y + lighthouse, and Playwright Chromium.
+# Typst (rebuild backend), EPUBCheck, Node + pa11y + lighthouse + ACE,
+# and Playwright Chromium.
 #
 # Target image size is ~2.5 GB. If you don't need HTML validation or
-# HTML→PDF conversion, use the `slim` target instead to drop Node +
-# Playwright (saves ~1.2 GB).
+# HTML→PDF/EPUB validation, use the `slim` target instead to drop Node +
+# Playwright and EPUBCheck (saves ~1.2 GB).
 
 # ---------------------------------------------------------------------------
 # 1. Base with system deps
@@ -84,13 +85,13 @@ RUN case "${TARGETARCH}" in \
 
 FROM base AS verapdf
 
-# verapdf-installer.zip must be present in the build context. Fetch with:
-#   curl -fsSLO https://software.verapdf.org/releases/1.30/verapdf-greenfield-1.30.1-installer.zip \
-#     && mv verapdf-greenfield-*-installer.zip verapdf-installer.zip
-# (skipping curl during build avoids transient outbound network failures.)
-COPY verapdf-installer.zip /tmp/verapdf/installer.zip
+ARG VERAPDF_VERSION=1.30.1
+ARG VERAPDF_RELEASE_SERIES=1.30
 
 RUN mkdir -p /opt/verapdf \
+    && mkdir -p /tmp/verapdf \
+    && curl -fsSL -o /tmp/verapdf/installer.zip \
+        "https://software.verapdf.org/releases/${VERAPDF_RELEASE_SERIES}/verapdf-greenfield-${VERAPDF_VERSION}-installer.zip" \
     && unzip -q /tmp/verapdf/installer.zip -d /tmp/verapdf \
     && JAR="$(find /tmp/verapdf -maxdepth 3 -type f -name 'verapdf-izpack-installer-*.jar' | head -n1)" \
     && [ -n "$JAR" ] || (echo "verapdf installer jar not found" >&2; exit 1) \
@@ -100,7 +101,7 @@ RUN mkdir -p /opt/verapdf \
     && rm -rf /tmp/verapdf
 
 # ---------------------------------------------------------------------------
-# 4. Install Typst (rebuild backend, PRD_typst_backend.md NFR-3)
+# 4. Install Typst for the rebuild backend.
 # ---------------------------------------------------------------------------
 
 FROM base AS typst
@@ -117,7 +118,7 @@ RUN case "${TARGETARCH}" in \
         | tar -xJ --strip-components=1 -C /usr/local/bin "typst-${triple}/typst"
 
 # ---------------------------------------------------------------------------
-# 5. Install Node + pa11y + Lighthouse
+# 5. Install Node + pa11y + Lighthouse + ACE
 # ---------------------------------------------------------------------------
 
 FROM base AS node-tools
@@ -126,11 +127,28 @@ ARG NODE_VERSION=20.17.0
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
     | tar -xJf - -C /opt \
     && mv "/opt/node-v${NODE_VERSION}-linux-x64" /opt/node \
-    && /opt/node/bin/npm install -g pa11y@8 lighthouse@12 \
+    && /opt/node/bin/npm install -g pa11y@8 lighthouse@12 @daisy/ace@1.3.0 \
     && /opt/node/bin/npm cache clean --force
 
 # ---------------------------------------------------------------------------
-# 6. Python dependencies
+# 6. Install EPUBCheck
+# ---------------------------------------------------------------------------
+
+FROM base AS epubcheck
+
+ARG EPUBCHECK_VERSION=5.2.1
+
+RUN mkdir -p /opt/epubcheck \
+    && curl -fsSL -o /tmp/epubcheck.zip \
+        "https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip" \
+    && unzip -q /tmp/epubcheck.zip -d /tmp/epubcheck-unpack \
+    && mv /tmp/epubcheck-unpack/epubcheck-${EPUBCHECK_VERSION}/* /opt/epubcheck/ \
+    && rm -rf /tmp/epubcheck.zip /tmp/epubcheck-unpack \
+    && printf '%s\n' '#!/bin/sh' 'exec java -jar /opt/epubcheck/epubcheck.jar "$@"' > /usr/local/bin/epubcheck \
+    && chmod +x /usr/local/bin/epubcheck
+
+# ---------------------------------------------------------------------------
+# 7. Python dependencies
 # ---------------------------------------------------------------------------
 
 FROM base AS python-deps
@@ -149,7 +167,7 @@ RUN pip install --upgrade pip setuptools wheel uv \
     && uv sync --frozen --no-dev --no-install-project --active --compile-bytecode
 
 # ---------------------------------------------------------------------------
-# 7. Playwright Chromium (requires Python env from step 6)
+# 8. Playwright Chromium (requires Python env from step 7)
 # ---------------------------------------------------------------------------
 
 FROM python-deps AS playwright
@@ -157,7 +175,7 @@ RUN playwright install --with-deps chromium \
     && rm -rf /root/.cache/ms-playwright/.links
 
 # ---------------------------------------------------------------------------
-# 8. Runtime image (combines everything + app source)
+# 9. Runtime image (combines everything + app source)
 # ---------------------------------------------------------------------------
 
 FROM base AS runtime
@@ -166,6 +184,8 @@ COPY --from=verapdf /opt/verapdf /opt/verapdf
 RUN ln -s /opt/verapdf/verapdf /usr/local/bin/verapdf
 COPY --from=questpdf /out/remedy-questpdf /usr/local/bin/remedy-questpdf
 COPY --from=typst /usr/local/bin/typst /usr/local/bin/typst
+COPY --from=epubcheck /opt/epubcheck /opt/epubcheck
+COPY --from=epubcheck /usr/local/bin/epubcheck /usr/local/bin/epubcheck
 COPY --from=node-tools /opt/node /opt/node
 COPY --from=python-deps /opt/venv /opt/venv
 # Playwright browsers are in /root/.cache/ms-playwright after install;
@@ -196,6 +216,8 @@ ENV JOB_DIR=/app/job_data \
     LOG_DIR=/app/state/logs \
     TMPDIR=/app/tmp \
     VERAPDF_PATH=/usr/local/bin/verapdf \
+    EPUBCHECK_PATH=/usr/local/bin/epubcheck \
+    ACE_PATH=/opt/node/bin/ace \
     REMEDY_QUESTPDF_BINARY=/usr/local/bin/remedy-questpdf \
     GHOSTSCRIPT_ENABLED=true \
     GHOSTSCRIPT_PATH=/usr/bin/gs \
@@ -207,8 +229,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
 # ---------------------------------------------------------------------------
-# 9. Optional slim target (no Node / Playwright — skips HTML validation
-#     and HTML→PDF conversion, ~1.2 GB smaller)
+# 10. Optional slim target (no Node / Playwright / EPUBCheck — skips HTML
+#     validation, HTML→PDF conversion, and HTML→EPUB automated verification,
+#     ~1.2 GB smaller)
 # ---------------------------------------------------------------------------
 
 FROM base AS runtime-slim

@@ -1,4 +1,4 @@
-"""Typst rebuild renderer (PRD_typst_backend.md §5.2).
+"""Typst rebuild renderer.
 
 Same effective contract as QuestPdfSidecar.render(): RebuildRequest -> PDF
 bytes. Unlike the sidecar's stdin/stdout protocol, Typst compiles generated

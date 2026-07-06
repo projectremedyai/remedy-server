@@ -1,4 +1,4 @@
-"""Post-generation struct-tree assertion pass (PRD_typst_backend.md §5.4).
+"""Post-generation struct-tree assertion pass.
 
 Independently verifies that the compiled PDF's struct tree round-trips the
 input RebuildRequest — the gate veraPDF cannot provide (Caveat 2: veraPDF

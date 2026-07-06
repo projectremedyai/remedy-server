@@ -1,4 +1,4 @@
-"""office-verify deterministic rule engine (PRD_ooxml_a11y_validator.md §4).
+"""office-verify deterministic rule engine.
 
 Each rule is a pure function ``(DocxContext) -> OfficeCheckResult`` registered
 in ``DOCX_RULES`` under its canonical rule id. Determinism contract (NFR1):

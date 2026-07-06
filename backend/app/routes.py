@@ -30,6 +30,7 @@ from backend.app.engine_service import (
     media_type_for,
 )
 from backend.app.jobs import (
+    JOB_KIND_CONVERT_HTML_TO_EPUB,
     JOB_KIND_CONVERT_HTML_TO_PDF,
     JOB_KIND_CONVERT_OFFICE_TO_HTML,
     JOB_KIND_CONVERT_PDF_TO_HTML,
@@ -97,6 +98,35 @@ async def _stage_upload(
     staging = settings.job_dir / f"_staging-{uuid.uuid4().hex}{suffix}"
     staging.write_bytes(contents)
     return staging, ft, contents
+
+
+async def _stage_html_upload(file: UploadFile, settings: Settings) -> Path:
+    """Read, lightly validate, and stage an uploaded HTML document."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in (".html", ".htm"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only .html / .htm accepted.",
+        )
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    contents = await file.read(max_bytes + 1)
+    if len(contents) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"File exceeds max upload size ({settings.max_upload_mb} MB).",
+        )
+
+    if b"<html" not in contents.lower():
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="File does not appear to be HTML.",
+        )
+
+    settings.job_dir.mkdir(parents=True, exist_ok=True)
+    staging = settings.job_dir / f"_staging-{uuid.uuid4().hex}.html"
+    staging.write_bytes(contents)
+    return staging
 
 
 async def _finalize_upload_and_enqueue(
@@ -252,32 +282,25 @@ def build_router(
         file: UploadFile = File(...),
     ) -> JSONResponse:
         """Upload an HTML file → async tagged-PDF conversion."""
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in (".html", ".htm"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail="Only .html / .htm accepted.",
-            )
-        max_bytes = settings.max_upload_mb * 1024 * 1024
-        contents = await file.read(max_bytes + 1)
-        if len(contents) > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                detail=f"File exceeds max upload size ({settings.max_upload_mb} MB).",
-            )
-        # Light sanity: must contain an "<html" tag.
-        if b"<html" not in contents.lower():
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail="File does not appear to be HTML.",
-            )
-
-        settings.job_dir.mkdir(parents=True, exist_ok=True)
-        staging = settings.job_dir / f"_staging-{uuid.uuid4().hex}.html"
-        staging.write_bytes(contents)
+        staging = await _stage_html_upload(file, settings)
         body = await _finalize_upload_and_enqueue(
             store, worker, settings, staging, ".html",
             kind=JOB_KIND_CONVERT_HTML_TO_PDF, result_media_type="application/pdf",
+        )
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=body)
+
+    @router.post("/v1/convert/html-to-epub", dependencies=[require_key])
+    @upload_limit
+    async def convert_html_to_epub(
+        request: Request,
+        file: UploadFile = File(...),
+    ) -> JSONResponse:
+        """Upload an accessible HTML file → async EPUB Accessibility 1.1 conversion."""
+        staging = await _stage_html_upload(file, settings)
+        body = await _finalize_upload_and_enqueue(
+            store, worker, settings, staging, ".html",
+            kind=JOB_KIND_CONVERT_HTML_TO_EPUB,
+            result_media_type="application/epub+zip",
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=body)
 
@@ -349,6 +372,7 @@ def build_router(
             )
         ext_for_media = {
             "application/pdf": ".pdf",
+            "application/epub+zip": ".epub",
             "text/html": ".html",
         }.get(job.result_media_type, path.suffix or "")
         return FileResponse(

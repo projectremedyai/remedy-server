@@ -12,8 +12,16 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from types import SimpleNamespace
 
-from project_remedy.pdf_vision import EmptyVisionResponse, OllamaVisionProvider
+from project_remedy.config import load_config
+from project_remedy.pdf_vision import (
+    EmptyVisionResponse,
+    OllamaVisionProvider,
+    TaskRoutedVisionProvider,
+    create_provider_from_config,
+    _parse_task_provider_map,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +180,221 @@ async def test_empty_is_transient_rotates_nodes(monkeypatch):
     assert len([c for c in calls if c[0] == "/chat/completions"]) == 2
 
 
+async def test_openai_compat_response_format_passthrough(monkeypatch):
+    """OpenAI-compatible endpoints receive json_object exactly as requested."""
+    prov = OllamaVisionProvider(
+        base_url="http://local-vllm.test/v1",
+        model="qwen3vl-32b-remedy",
+        retry_backoff_seconds=0.0,
+    )
+
+    def handler(endpoint, body, calls):
+        assert endpoint == "/chat/completions"
+        assert body["response_format"] == {"type": "json_object"}
+        return _FakeResp(_compat_payload('{"ok": true}'))
+
+    calls = _install(monkeypatch, handler)
+    out = await prov.analyze_image(
+        None,
+        "prompt",
+        response_format={"type": "json_object"},
+    )
+    assert out == '{"ok": true}'
+    assert len(calls) == 1
+
+
 async def test_empty_vision_response_is_runtimeerror():
     """EmptyVisionResponse stays a RuntimeError subclass (callers catch broadly)."""
     assert issubclass(EmptyVisionResponse, RuntimeError)
+
+
+class _RecordingVisionProvider:
+    def __init__(self, name: str, *, fail: bool = False) -> None:
+        self.model = name
+        self.base_url = "http://example.test/v1"
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    async def analyze_image(
+        self,
+        image_path,
+        prompt,
+        *,
+        max_tokens=4096,
+        response_format=None,
+        task=None,
+    ):
+        self.calls.append({
+            "image_path": image_path,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "response_format": response_format,
+            "task": task,
+        })
+        if self.fail:
+            raise RuntimeError(f"{self.model} failed")
+        return f"{self.model}:{task or 'default'}"
+
+
+def test_task_provider_map_accepts_model_and_url_values():
+    assert _parse_task_provider_map(
+        "contrast:qwen3vl-32b-contrast, reading-order:http://host:8000/v1",
+        env_name="TEST_ROUTES",
+    ) == {
+        "contrast": "qwen3vl-32b-contrast",
+        "reading_order": "http://host:8000/v1",
+    }
+
+
+def test_task_provider_map_rejects_malformed_entries():
+    with pytest.raises(ValueError, match="task:value"):
+        _parse_task_provider_map("contrast", env_name="TEST_ROUTES")
+    with pytest.raises(ValueError, match="non-empty"):
+        _parse_task_provider_map("contrast:", env_name="TEST_ROUTES")
+
+
+async def test_task_routed_provider_sends_contrast_to_override():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast")
+    provider = TaskRoutedVisionProvider(primary, {"contrast": contrast})
+
+    assert await provider.analyze_image(None, "prompt", task="contrast") == "contrast:contrast"
+    assert await provider.analyze_image(None, "prompt", task="heading_hierarchy") == (
+        "primary:heading_hierarchy"
+    )
+
+    assert [call["task"] for call in contrast.calls] == ["contrast"]
+    assert [call["task"] for call in primary.calls] == ["heading_hierarchy"]
+
+
+async def test_task_routed_provider_does_not_fallback_by_default():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast", fail=True)
+    provider = TaskRoutedVisionProvider(primary, {"contrast": contrast})
+
+    with pytest.raises(RuntimeError, match="contrast failed"):
+        await provider.analyze_image(None, "prompt", task="contrast")
+    assert primary.calls == []
+
+
+async def test_task_routed_provider_fallback_is_opt_in():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast", fail=True)
+    provider = TaskRoutedVisionProvider(
+        primary,
+        {"contrast": contrast},
+        allow_fallback=True,
+    )
+
+    assert await provider.analyze_image(None, "prompt", task="contrast") == "primary:contrast"
+    assert [call["task"] for call in primary.calls] == ["contrast"]
+
+
+def test_provider_config_builds_full_env_task_router(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_VISION_TASK_MODELS",
+        ",".join([
+            "contrast:qwen3vl-32b-remedy-contrast-v1",
+            "reading_order:qwen3vl-32b-remedy-reading-order-v1",
+            "heading-hierarchy:qwen3vl-32b-remedy-heading-v1",
+            "table_structure:qwen3vl-32b-remedy-table-v1",
+        ]),
+    )
+    monkeypatch.setenv(
+        "OLLAMA_VISION_TASK_BASE_URLS",
+        "contrast:http://contrast.test/v1,table_structure:http://table.test/v1",
+    )
+    monkeypatch.delenv("OLLAMA_VISION_ROUTER_ALLOW_FALLBACK", raising=False)
+    config = SimpleNamespace(
+        api=SimpleNamespace(
+            api_key="dummy",
+            base_url="http://primary.test/v1",
+            vision_base_url="http://primary.test/v1",
+            vision_cluster_nodes=[],
+            vision_model="qwen3vl-32b-remedy",
+            ollama_stream=False,
+            ollama_reasoning_effort="low",
+        )
+    )
+
+    provider = create_provider_from_config(config)
+
+    assert isinstance(provider, TaskRoutedVisionProvider)
+    assert provider.allow_fallback is False
+    assert provider.primary.model == "qwen3vl-32b-remedy"
+    assert provider.task_providers["contrast"].model == "qwen3vl-32b-remedy-contrast-v1"
+    assert provider.task_providers["contrast"].base_url == "http://contrast.test/v1"
+    assert provider.task_providers["reading_order"].model == (
+        "qwen3vl-32b-remedy-reading-order-v1"
+    )
+    assert provider.task_providers["reading_order"].base_url == "http://primary.test/v1"
+    assert provider.task_providers["heading_hierarchy"].model == (
+        "qwen3vl-32b-remedy-heading-v1"
+    )
+    assert provider.task_providers["table_structure"].model == "qwen3vl-32b-remedy-table-v1"
+    assert provider.task_providers["table_structure"].base_url == "http://table.test/v1"
+
+
+def test_provider_config_rejects_task_base_url_without_model(monkeypatch):
+    monkeypatch.setenv("OLLAMA_VISION_TASK_MODELS", "contrast:qwen3vl-32b-remedy-contrast-v1")
+    monkeypatch.setenv("OLLAMA_VISION_TASK_BASE_URLS", "heading_hierarchy:http://heading.test/v1")
+    config = SimpleNamespace(
+        api=SimpleNamespace(
+            api_key="dummy",
+            base_url="http://primary.test/v1",
+            vision_base_url="",
+            vision_cluster_nodes=[],
+            vision_model="qwen3vl-32b-remedy",
+            ollama_stream=False,
+            ollama_reasoning_effort="low",
+        )
+    )
+
+    with pytest.raises(ValueError, match="without models: heading_hierarchy"):
+        create_provider_from_config(config)
+
+
+def test_env_file_can_configure_task_router(tmp_path, monkeypatch):
+    for name in (
+        "OLLAMA_API_KEY",
+        "OLLAMA_BASE_URL",
+        "VISION_BASE_URL",
+        "OLLAMA_VISION_MODEL",
+        "OLLAMA_VISION_TASK_MODELS",
+        "OLLAMA_VISION_TASK_BASE_URLS",
+        "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join([
+            "OLLAMA_API_KEY=dummy",
+            "VISION_BASE_URL=http://primary.test/v1",
+            "OLLAMA_VISION_MODEL=qwen3vl-32b-remedy",
+            (
+                "OLLAMA_VISION_TASK_MODELS="
+                "contrast:qwen3vl-32b-remedy-contrast-v1,"
+                "reading_order:qwen3vl-32b-remedy-reading-order-v1,"
+                "heading_hierarchy:qwen3vl-32b-remedy-heading-v1,"
+                "table_structure:qwen3vl-32b-remedy-table-v1"
+            ),
+            (
+                "OLLAMA_VISION_TASK_BASE_URLS="
+                "contrast:http://contrast.test/v1,"
+                "table_structure:http://table.test/v1"
+            ),
+            "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK=0",
+        ]),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_path, yaml_path=tmp_path / "missing.yaml")
+    provider = create_provider_from_config(config)
+
+    assert isinstance(provider, TaskRoutedVisionProvider)
+    assert provider.allow_fallback is False
+    assert provider.primary.model == "qwen3vl-32b-remedy"
+    assert provider.primary.base_url == "http://primary.test/v1"
+    assert provider.task_providers["contrast"].model == "qwen3vl-32b-remedy-contrast-v1"
+    assert provider.task_providers["contrast"].base_url == "http://contrast.test/v1"
+    assert provider.task_providers["reading_order"].base_url == "http://primary.test/v1"

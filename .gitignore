@@ -33,6 +33,7 @@ BUILD_LOG.md
 v2_docs/
 excalidraw.log
 .claude/
+.local-archive/
 
 # Database
 pipeline.db
@@ -68,8 +69,7 @@ Thumbs.db
 *.swo
 
 # Research docs and references (not needed for app to run)
-docs/*
-!docs/superpowers/
+docs/
 
 # OneDrive artifacts
 ~$*
@@ -98,7 +98,6 @@ scripts/laccd_smoke_batch.py
 !src/project_remedy/behavioral_proxies/**/prompts/*.md
 !src/project_remedy/quality_judges/**/prompts/
 !src/project_remedy/quality_judges/**/prompts/*.md
-docs/
 doc/
 knowledge-base/
 knowledge_base/
@@ -117,6 +116,13 @@ test_*.py
 
 # Screenshots / demo recordings — not part of source
 screenshots/
+
+# Local model, fine-tuning, and evaluation outputs
+artifacts/
+eval_runs/
+tools/finetune/
+tools/corpus_annotations/v2_export/
+tools/corpus_annotations/v2_real_eval/
 
 # Graphify knowledge-graph output (generated, ~36MB) — not source
 graphify-out/

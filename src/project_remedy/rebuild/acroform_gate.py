@@ -1,4 +1,4 @@
-"""AcroForm pre-flight detection (PRD_typst_backend.md FR-13).
+"""AcroForm pre-flight detection for the rebuild tier.
 
 Neither rebuild backend regenerates form fields from the AST — a fillable
 source routed into the AST rebuild tier would silently lose its fields.

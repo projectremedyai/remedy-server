@@ -1,4 +1,4 @@
-"""AST -> Typst source generator (PRD_typst_backend.md §5.3).
+"""AST -> Typst source generator.
 
 Pure function of the RebuildRequest (FR-7). Emits ONLY real Typst semantic
 constructs — heading markup, list markup, table()/figure()/image() calls —

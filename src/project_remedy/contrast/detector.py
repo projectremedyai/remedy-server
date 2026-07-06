@@ -203,6 +203,7 @@ class ContrastDetector:
                         tmp_path,
                         prompt_text,
                         response_format=schema,
+                        task="contrast",
                     )
                 elif hasattr(self._client, "vision"):
                     response_text = await self._client.vision(

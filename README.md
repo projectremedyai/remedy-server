@@ -32,11 +32,11 @@ curl http://127.0.0.1:8000/openapi.json   # full schema
 
 ### Option A — docker-compose (recommended)
 
-One-command deploy to any Linux host with Docker. Ships Ghostscript + veraPDF + pa11y + Lighthouse + Playwright Chromium + ocrmypdf baked in. Caddy fronts it with automatic HTTPS via Let's Encrypt.
+One-command deploy to any Linux host with Docker. Ships Ghostscript + veraPDF + EPUBCheck + ACE + pa11y + Lighthouse + Playwright Chromium + ocrmypdf baked in. Caddy fronts it with automatic HTTPS via Let's Encrypt.
 
 ```bash
 # On the server:
-git clone https://github.com/johnnyrobot/remedy-server
+git clone https://github.com/projectremedyai/remedy-server
 cd remedy-server
 
 # Set domain + optional Caddy global options + your API key.
@@ -60,7 +60,7 @@ The build takes ~10 minutes first time (includes Chromium, veraPDF, the QuestPDF
 
 ### Option B — systemd (no Docker)
 
-See [`deploy/systemd/README.md`](deploy/systemd/README.md) for native install instructions. Summary: install Ghostscript / veraPDF / ocrmypdf / pa11y / Lighthouse via apt + npm, set up a `remedy` system user, drop the provided unit file in `/etc/systemd/system/`, point Caddy at `127.0.0.1:8000`.
+Use [`deploy/systemd/remedy-server.service`](deploy/systemd/remedy-server.service) as the native service template. Summary: install Ghostscript / veraPDF / ocrmypdf / pa11y / Lighthouse via apt + npm, set up a `remedy` system user, drop the unit file in `/etc/systemd/system/`, point Caddy at `127.0.0.1:8000`, and store secrets in `/etc/remedy-server.env`.
 
 ### Updating
 
@@ -113,6 +113,7 @@ curl -X POST http://127.0.0.1:8000/v1/convert/pdf-to-html -F "file=@input.pdf"
 | `POST` | `/v1/convert/pdf-to-html` | PDF → accessible HTML (async). |
 | `POST` | `/v1/convert/office-to-html` | Office → accessible HTML (async). |
 | `POST` | `/v1/convert/html-to-pdf` | HTML → tagged PDF (async, via Playwright). |
+| `POST` | `/v1/convert/html-to-epub` | HTML → EPUB Accessibility 1.1 package (async). |
 | `POST` | `/v1/vision-plan/run` | **Opt-in Tier 3.** Vision-planner rescue (async). Not the default. |
 | `GET` | `/v1/jobs/{id}` | Status (`queued`/`running`/`done`/`failed`), stage, progress. |
 | `GET` | `/v1/jobs/{id}/result` | Download the produced file (media type depends on job kind). |
@@ -195,7 +196,7 @@ Each job kind maps to a dedicated handler in `backend/app/engine_service.py`. Th
 
 Vision-planner / Tier-3 agentic remediation is **not** part of this default flow. It's an opt-in tool (`/v1/vision-plan/run`) because the deterministic path is faster, cheaper, and more reliable on the corpus we've tested.
 
-For the full module map, see `CLAUDE.md`.
+For the public module map, see the layout section below.
 
 ---
 
@@ -226,6 +227,7 @@ All env-driven. See `.env.example` for the full list. Key knobs:
   Runtime checks reject same-family judge or behavioral models.
 - Ghostscript: `GHOSTSCRIPT_ENABLED`, `GHOSTSCRIPT_PATH`
 - veraPDF: `VERAPDF_PATH`
+- EPUB validation: `EPUBCHECK_PATH`, `ACE_PATH`. Missing validators are recorded as skipped in job metadata.
 - Rebuild tier (semantic-rebuild escalation, opt-in per job via `allow_semantic_rebuild`):
   `REBUILD_ENABLED` (default `true`), `REBUILD_BACKEND=questpdf|typst` (default `questpdf`),
   `REBUILD_TYPST_TIMEOUT_S` (default `120`). Per job, `POST /v1/remediate` also accepts an
@@ -264,7 +266,7 @@ The API is the primary interface; the CLI is for ad-hoc debugging.
 
 ```bash
 ./.venv/bin/python -m pytest -v       # all tests
-./.venv/bin/python -m pytest tests/api -v  # HTTP tests only
+./.venv/bin/python -m pytest tests/unit -v  # unit tests only
 ./.venv/bin/uvicorn backend.app.main:app --reload
 curl http://127.0.0.1:8000/openapi.json | jq '.paths | keys'
 ```
