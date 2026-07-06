@@ -660,6 +660,47 @@ def test_router_readiness_combines_adapter_and_metric_gates(tmp_path):
     assert summary["final_ship_ready"] is False
     assert all(item["passed"] for item in summary["live_router_gates"])
 
+    heldout_summary = tmp_path / "heldout_lamc_validation.summary.json"
+    heldout_summary.write_text(json.dumps({
+        "count": 2,
+        "passed": 1,
+        "failed": 1,
+        "pass_rate": 0.5,
+        "verapdf_passed": 2,
+        "check_zero_failures": 1,
+        "report_zero_failures": 2,
+        "text_fidelity_passed": 2,
+        "visual_fidelity_passed": 2,
+        "content_fidelity_passed": 1,
+    }), encoding="utf-8")
+    args.heldout_validation_summary = heldout_summary
+
+    summary = readiness.build_summary(args)
+
+    assert summary["decision"] == "heldout_lamc_pipeline_validation_failed"
+    assert summary["final_ship_ready"] is False
+    assert any(not item["passed"] for item in summary["heldout_validation_gates"])
+
+    heldout_summary.write_text(json.dumps({
+        "count": 2,
+        "passed": 2,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "verapdf_passed": 2,
+        "check_zero_failures": 2,
+        "report_zero_failures": 2,
+        "text_fidelity_passed": 2,
+        "visual_fidelity_passed": 2,
+        "content_fidelity_passed": 2,
+    }), encoding="utf-8")
+
+    summary = readiness.build_summary(args)
+
+    assert summary["decision"] == "router_final_gates_passed"
+    assert summary["final_ship_ready"] is True
+    assert summary["final_ship_blocker"] == ""
+    assert all(item["passed"] for item in summary["heldout_validation_gates"])
+
 
 def test_heldout_lamc_validation_parses_json_with_token_footer():
     heldout = load_tool("run_heldout_lamc_validation")
@@ -684,6 +725,8 @@ def test_heldout_lamc_validation_summary_counts_final_gates():
                 "summary": {"verapdf_passed": True, "failed_checks": 0},
             },
             "text_fidelity": {"normalized_text_equal": True},
+            "visual_fidelity": {"visual_match": True},
+            "content_fidelity_passed": True,
         },
         {
             "source": "fail.pdf",
@@ -696,6 +739,8 @@ def test_heldout_lamc_validation_summary_counts_final_gates():
                 "summary": {"verapdf_passed": True, "failed_checks": 0},
             },
             "text_fidelity": {"normalized_text_equal": True},
+            "visual_fidelity": {"visual_match": True},
+            "content_fidelity_passed": True,
         },
     ]
 
@@ -708,4 +753,32 @@ def test_heldout_lamc_validation_summary_counts_final_gates():
     assert summary["verapdf_passed"] == 2
     assert summary["check_zero_failures"] == 1
     assert summary["text_fidelity_passed"] == 2
+    assert summary["visual_fidelity_passed"] == 2
+    assert summary["content_fidelity_passed"] == 2
     assert summary["failures"][0]["source"] == "fail.pdf"
+
+
+def test_heldout_lamc_text_fidelity_reports_token_preservation(monkeypatch):
+    heldout = load_tool("run_heldout_lamc_validation")
+
+    def fake_normalized_text(path):
+        text = {
+            "source.pdf": "Alpha beta gamma.",
+            "output.pdf": "Gamma alpha beta.",
+        }[path.name]
+        return {
+            "available": True,
+            "normalized_chars": len(text),
+            "_text": text,
+        }
+
+    monkeypatch.setattr(heldout, "normalized_text", fake_normalized_text)
+
+    result = heldout.text_fidelity(Path("source.pdf"), Path("output.pdf"))
+
+    assert result["normalized_text_equal"] is False
+    assert result["token_multiset_equal"] is True
+    assert result["alnum_char_multiset_equal"] is True
+    assert result["missing_token_sample"] == []
+    assert result["added_token_sample"] == []
+    assert result["sequence_similarity"] < 1.0

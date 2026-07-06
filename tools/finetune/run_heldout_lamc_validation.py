@@ -22,6 +22,8 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +157,20 @@ def normalized_text(path: Path) -> dict[str, Any]:
     }
 
 
+def _text_tokens(text: str) -> list[str]:
+    return re.findall(r"\w+|[^\w\s]", text.casefold(), flags=re.UNICODE)
+
+
+def _counter_sample(counter: Counter, *, limit: int = 20) -> list[str]:
+    return list(counter.elements())[:limit]
+
+
+def _compact_chars(text: str, *, alnum_only: bool = False) -> str:
+    if alnum_only:
+        return re.sub(r"[^\w]+", "", text).casefold()
+    return re.sub(r"\s+", "", text).casefold()
+
+
 def text_fidelity(source: Path, output: Path) -> dict[str, Any]:
     src = normalized_text(source)
     out = normalized_text(output)
@@ -169,8 +185,116 @@ def text_fidelity(source: Path, output: Path) -> dict[str, Any]:
     if out.get("error"):
         result["output_error"] = out["error"]
     if result["available"]:
-        result["normalized_text_equal"] = src.get("_text") == out.get("_text")
+        source_text = str(src.get("_text") or "")
+        output_text = str(out.get("_text") or "")
+        source_tokens = _text_tokens(source_text)
+        output_tokens = _text_tokens(output_text)
+        source_counter = Counter(source_tokens)
+        output_counter = Counter(output_tokens)
+        whitespace_compact_source = _compact_chars(source_text)
+        whitespace_compact_output = _compact_chars(output_text)
+        alnum_source = _compact_chars(source_text, alnum_only=True)
+        alnum_output = _compact_chars(output_text, alnum_only=True)
+        result.update(
+            normalized_text_equal=source_text == output_text,
+            whitespace_insensitive_equal=whitespace_compact_source == whitespace_compact_output,
+            whitespace_insensitive_char_multiset_equal=(
+                Counter(whitespace_compact_source) == Counter(whitespace_compact_output)
+            ),
+            alnum_char_multiset_equal=Counter(alnum_source) == Counter(alnum_output),
+            sequence_similarity=round(
+                SequenceMatcher(None, source_text, output_text, autojunk=False).ratio(),
+                4,
+            ),
+            source_token_count=len(source_tokens),
+            output_token_count=len(output_tokens),
+            token_count_delta=len(output_tokens) - len(source_tokens),
+            token_multiset_equal=source_counter == output_counter,
+            missing_token_sample=_counter_sample(source_counter - output_counter),
+            added_token_sample=_counter_sample(output_counter - source_counter),
+        )
     return result
+
+
+def visual_fidelity(
+    source: Path,
+    output: Path,
+    *,
+    dpi: int = 72,
+    mean_threshold: float = 0.5,
+    max_threshold: int = 4,
+) -> dict[str, Any]:
+    """Compare rendered source/output pages as a guard against visual drift."""
+
+    try:
+        import fitz  # type: ignore
+        from PIL import Image, ImageChops, ImageStat
+    except Exception as exc:  # pragma: no cover - depends on local optional deps
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def page_image(page: Any) -> Any:
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(dpi / 72, dpi / 72),
+            alpha=False,
+            colorspace=fitz.csRGB,
+        )
+        return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    try:
+        source_doc = fitz.open(source)
+        output_doc = fitz.open(output)
+        page_count_equal = len(source_doc) == len(output_doc)
+        page_metrics: list[dict[str, Any]] = []
+        for page_index, (source_page, output_page) in enumerate(zip(source_doc, output_doc), start=1):
+            source_image = page_image(source_page)
+            output_image = page_image(output_page)
+            sizes_equal = source_image.size == output_image.size
+            metric: dict[str, Any] = {
+                "page": page_index,
+                "source_size": source_image.size,
+                "output_size": output_image.size,
+                "sizes_equal": sizes_equal,
+            }
+            if sizes_equal:
+                diff = ImageChops.difference(source_image, output_image)
+                stat = ImageStat.Stat(diff)
+                mean_delta = sum(stat.mean) / len(stat.mean)
+                max_delta = max(channel[1] for channel in stat.extrema)
+                metric.update(
+                    mean_abs_pixel_delta=round(mean_delta, 4),
+                    max_abs_pixel_delta=int(max_delta),
+                )
+            page_metrics.append(metric)
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    comparable = [item for item in page_metrics if item.get("sizes_equal")]
+    mean_values = [float(item.get("mean_abs_pixel_delta", 255.0)) for item in comparable]
+    max_values = [int(item.get("max_abs_pixel_delta", 255)) for item in comparable]
+    visual_match = (
+        page_count_equal
+        and len(comparable) == len(page_metrics)
+        and bool(page_metrics)
+        and (max(mean_values) if mean_values else 255.0) <= mean_threshold
+        and (max(max_values) if max_values else 255) <= max_threshold
+    )
+    return {
+        "available": True,
+        "dpi": dpi,
+        "page_count_equal": page_count_equal,
+        "source_pages": len(source_doc),
+        "output_pages": len(output_doc),
+        "mean_abs_pixel_delta_avg": round(sum(mean_values) / len(mean_values), 4)
+        if mean_values else None,
+        "mean_abs_pixel_delta_max_page": round(max(mean_values), 4) if mean_values else None,
+        "max_abs_pixel_delta": max(max_values) if max_values else None,
+        "visual_match": visual_match,
+        "thresholds": {
+            "mean_abs_pixel_delta_max_page": mean_threshold,
+            "max_abs_pixel_delta": max_threshold,
+        },
+        "pages": page_metrics,
+    }
 
 
 def check_passed(check_json: dict[str, Any] | None) -> bool:
@@ -285,12 +409,30 @@ def validate_one(source: Path, args: argparse.Namespace) -> dict[str, Any]:
             "passed": report_passed(report_data),
         }
         record["text_fidelity"] = text_fidelity(source, output_pdf)
+        record["visual_fidelity"] = visual_fidelity(
+            source,
+            output_pdf,
+            dpi=args.visual_dpi,
+            mean_threshold=args.visual_mean_threshold,
+            max_threshold=args.visual_max_threshold,
+        )
     else:
         record["check"] = {"passed": False, "parsed": False}
         record["report"] = {"passed": False, "parsed": False}
         record["text_fidelity"] = {"available": False, "normalized_text_equal": False}
+        record["visual_fidelity"] = {"available": False, "visual_match": False}
 
-    text_ok = record.get("text_fidelity", {}).get("normalized_text_equal") is True
+    text_diag = record.get("text_fidelity") or {}
+    visual_diag = record.get("visual_fidelity") or {}
+    text_ok = text_diag.get("normalized_text_equal") is True
+    content_ok = bool(
+        text_ok
+        or (
+            text_diag.get("alnum_char_multiset_equal") is True
+            and visual_diag.get("visual_match") is True
+        )
+    )
+    record["content_fidelity_passed"] = content_ok
     fix_ok = (
         record.get("fix", {}).get("returncode") == 0
         and not record.get("fix", {}).get("timed_out")
@@ -300,7 +442,7 @@ def validate_one(source: Path, args: argparse.Namespace) -> dict[str, Any]:
         and record["output_exists"]
         and record.get("check", {}).get("passed")
         and record.get("report", {}).get("passed")
-        and text_ok
+        and content_ok
     )
     return record
 
@@ -322,6 +464,30 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             (record.get("text_fidelity") or {}).get("normalized_text_equal") is True
             for record in records
         ),
+        "text_token_multiset_passed": sum(
+            (record.get("text_fidelity") or {}).get("token_multiset_equal") is True
+            for record in records
+        ),
+        "text_alnum_char_multiset_passed": sum(
+            (record.get("text_fidelity") or {}).get("alnum_char_multiset_equal") is True
+            for record in records
+        ),
+        "visual_fidelity_passed": sum(
+            (record.get("visual_fidelity") or {}).get("visual_match") is True
+            for record in records
+        ),
+        "content_fidelity_passed": sum(
+            record.get("content_fidelity_passed") is True
+            for record in records
+        ),
+        "text_min_sequence_similarity": min(
+            (
+                float((record.get("text_fidelity") or {}).get("sequence_similarity"))
+                for record in records
+                if (record.get("text_fidelity") or {}).get("sequence_similarity") is not None
+            ),
+            default=None,
+        ),
         "failures": [
             {
                 "source": record.get("source"),
@@ -330,6 +496,8 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "check_summary": (record.get("check") or {}).get("summary"),
                 "report_summary": (record.get("report") or {}).get("summary"),
                 "text_fidelity": record.get("text_fidelity"),
+                "visual_fidelity": record.get("visual_fidelity"),
+                "content_fidelity_passed": record.get("content_fidelity_passed"),
             }
             for record in records
             if not record.get("passed")
@@ -360,6 +528,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--fix-timeout", type=int, default=1800)
     ap.add_argument("--check-timeout", type=int, default=600)
     ap.add_argument("--report-timeout", type=int, default=600)
+    ap.add_argument("--visual-dpi", type=int, default=72)
+    ap.add_argument("--visual-mean-threshold", type=float, default=0.5)
+    ap.add_argument("--visual-max-threshold", type=int, default=4)
     ap.add_argument("--skip-existing", action="store_true")
     ap.add_argument("--no-thorough", dest="thorough", action="store_false")
     ap.set_defaults(thorough=True)

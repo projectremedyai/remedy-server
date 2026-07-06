@@ -73,6 +73,61 @@ def all_passed(items: list[dict[str, Any]]) -> bool:
     return all(bool(item.get("passed")) for item in items)
 
 
+def heldout_gates(summary: dict[str, Any], *, source: str) -> list[dict[str, Any]]:
+    """Final held-out LAMC remediation gates.
+
+    This is intentionally stricter than the live router smoke: a router can be
+    reachable and JSON-reliable while the end-to-end remediation pipeline still
+    misses a heading, leaves a contrast failure, or changes extracted text.
+    """
+
+    count = int(summary.get("count") or 0)
+    gates = [
+        gate("held-out LAMC files > 0", count, min_value=1, source=source),
+        gate("held-out LAMC failed == 0", summary.get("failed"), equals=0, source=source),
+        gate(
+            "held-out LAMC pass_rate == 1.0",
+            summary.get("pass_rate"),
+            equals=1.0,
+            source=source,
+        ),
+        gate(
+            "held-out LAMC veraPDF passed all files",
+            summary.get("verapdf_passed"),
+            equals=count,
+            source=source,
+        ),
+        gate(
+            "held-out LAMC check zero failures for all files",
+            summary.get("check_zero_failures"),
+            equals=count,
+            source=source,
+        ),
+        gate(
+            "held-out LAMC report zero failures for all files",
+            summary.get("report_zero_failures"),
+            equals=count,
+            source=source,
+        ),
+        gate(
+            "held-out LAMC content fidelity passed all files",
+            summary.get("content_fidelity_passed", summary.get("text_fidelity_passed")),
+            equals=count,
+            source=source,
+        ),
+    ]
+    if "visual_fidelity_passed" in summary:
+        gates.append(
+            gate(
+                "held-out LAMC visual fidelity passed all files",
+                summary.get("visual_fidelity_passed"),
+                equals=count,
+                source=source,
+            )
+        )
+    return gates
+
+
 def build_summary(args: argparse.Namespace) -> dict[str, Any]:
     eval_dir = args.eval_dir
     main_repo = args.main_repo
@@ -194,6 +249,15 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
 
+    heldout_validation_gates: list[dict[str, Any]] = []
+    heldout_validation_summary = getattr(args, "heldout_validation_summary", None)
+    if heldout_validation_summary:
+        heldout = load_json(heldout_validation_summary)
+        heldout_validation_gates = heldout_gates(
+            heldout,
+            source=str(heldout_validation_summary),
+        )
+
     task_gates = {
         "alt_text_quality": alt_gates,
         "table_structure": table_gates,
@@ -206,7 +270,18 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
     metric_gates.extend(live_router_gates)
     ready_for_live_smoke = all_passed(adapters) and all_passed(metric_gates)
     live_smoke_passed = bool(live_router_gates) and all_passed(live_router_gates)
-    if ready_for_live_smoke and live_smoke_passed:
+    heldout_was_run = bool(heldout_validation_gates)
+    heldout_passed = heldout_was_run and all_passed(heldout_validation_gates)
+    if ready_for_live_smoke and live_smoke_passed and heldout_was_run and not heldout_passed:
+        decision = "heldout_lamc_pipeline_validation_failed"
+        final_ship_blocker = (
+            "Held-out real LAMC remediation pipeline validation failed. Inspect "
+            "the held-out summary/failure analysis before wiring the router."
+        )
+    elif ready_for_live_smoke and live_smoke_passed and heldout_passed:
+        decision = "router_final_gates_passed"
+        final_ship_blocker = ""
+    elif ready_for_live_smoke and live_smoke_passed:
         decision = "ready_for_heldout_lamc_pipeline_validation"
         final_ship_blocker = (
             "Held-out real LAMC remediation pipeline validation has not been run "
@@ -225,7 +300,7 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         )
     return {
         "decision": decision,
-        "final_ship_ready": False,
+        "final_ship_ready": decision == "router_final_gates_passed",
         "final_ship_blocker": final_ship_blocker,
         "stable_alias": "qwen3vl-32b-remedy",
         "stable_alias_points_to": "alt-text v2 adapter",
@@ -234,6 +309,7 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         "task_gates": task_gates,
         "production_gates": production_gates,
         "live_router_gates": live_router_gates,
+        "heldout_validation_gates": heldout_validation_gates,
     }
 
 
@@ -253,6 +329,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="optional run_vision_eval summary from the live multi-LoRA router",
+    )
+    ap.add_argument(
+        "--heldout-validation-summary",
+        type=Path,
+        default=None,
+        help="optional run_heldout_lamc_validation summary from the live router profile",
     )
     ap.add_argument("--alt-adapter", type=Path, default=None)
     ap.add_argument("--table-adapter", type=Path, default=None)
@@ -274,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if summary["decision"] in {
         "ready_for_live_router_smoke",
         "ready_for_heldout_lamc_pipeline_validation",
+        "router_final_gates_passed",
     } else 1
 
 
