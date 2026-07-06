@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Run held-out LAMC PDF remediation validation through the configured router.
+
+This is intentionally a thin operational harness around the production CLI:
+
+1. ``remedy-pdf fix`` on each source PDF, usually with ``--thorough`` so the
+   vision router is exercised.
+2. ``remedy-pdf check --json`` on the output.
+3. ``remedy-pdf report --json --original`` for the compliance readout.
+4. Normalized text extraction comparison as a content-fidelity guard.
+
+The script writes one JSONL record per input and a compact summary JSON.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+ROUTER_ENV_KEYS = (
+    "OLLAMA_VISION_MODEL",
+    "VISION_BASE_URL",
+    "OLLAMA_BASE_URL",
+    "OLLAMA_VISION_TASK_MODELS",
+    "OLLAMA_VISION_TASK_BASE_URLS",
+    "OLLAMA_VISION_ROUTER_ALLOW_FALLBACK",
+    "OLLAMA_ESCALATION_MAX_INFLIGHT",
+    "OLLAMA_VISION_MAX_INFLIGHT",
+    "OLLAMA_VISION_GATE_TIMEOUT_SECONDS",
+    "OLLAMA_VISION_MAX_TOKENS",
+)
+
+
+def parse_first_json_object(text: str) -> tuple[dict[str, Any] | None, str]:
+    """Parse the first JSON object from CLI output, returning trailing footer.
+
+    Several Remedy CLI commands print a token-usage footer after ``--json``.
+    ``json.load`` rejects that as "extra data"; this helper keeps the structured
+    part and returns the footer for auditability.
+    """
+
+    start = text.find("{")
+    if start < 0:
+        return None, text.strip()
+    try:
+        data, end = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return None, text.strip()
+    if not isinstance(data, dict):
+        return None, text[start + end :].strip()
+    return data, text[start + end :].strip()
+
+
+def slugify(path: Path) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", path.stem).strip("._-")
+    return stem[:120] or "document"
+
+
+def collect_sources(args: argparse.Namespace) -> list[Path]:
+    sources: list[Path] = []
+    for value in args.sources:
+        sources.append(Path(value).expanduser())
+    if args.source_list:
+        for line in args.source_list.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                sources.append(Path(stripped).expanduser())
+    if args.source_dir:
+        sources.extend(sorted(args.source_dir.expanduser().glob("*.pdf")))
+
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in sources:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(resolved)
+    if args.limit:
+        unique = unique[: args.limit]
+    return unique
+
+
+def command_base(args: argparse.Namespace) -> list[str]:
+    if args.remedy_pdf_bin:
+        return [str(args.remedy_pdf_bin)]
+    found = shutil.which("remedy-pdf")
+    if found:
+        return [found]
+    return ["remedy-pdf"]
+
+
+def run_command(
+    cmd: list[str],
+    *,
+    timeout: int,
+    log_path: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    start = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        status = {
+            "returncode": proc.returncode,
+            "timed_out": False,
+            "elapsed_seconds": round(time.perf_counter() - start, 3),
+        }
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        status = {
+            "returncode": None,
+            "timed_out": True,
+            "elapsed_seconds": round(time.perf_counter() - start, 3),
+        }
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(output, encoding="utf-8")
+    status["log"] = str(log_path)
+    return status
+
+
+def normalized_text(path: Path) -> dict[str, Any]:
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - depends on local optional dep
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        doc = fitz.open(path)
+        text = "\n".join(page.get_text("text") for page in doc)
+        normalized = " ".join(text.split())
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "available": True,
+        "normalized_chars": len(normalized),
+        "preview": normalized[:300],
+        "_text": normalized,
+    }
+
+
+def text_fidelity(source: Path, output: Path) -> dict[str, Any]:
+    src = normalized_text(source)
+    out = normalized_text(output)
+    result: dict[str, Any] = {
+        "available": bool(src.get("available") and out.get("available")),
+        "source_normalized_chars": src.get("normalized_chars"),
+        "output_normalized_chars": out.get("normalized_chars"),
+        "normalized_text_equal": None,
+    }
+    if src.get("error"):
+        result["source_error"] = src["error"]
+    if out.get("error"):
+        result["output_error"] = out["error"]
+    if result["available"]:
+        result["normalized_text_equal"] = src.get("_text") == out.get("_text")
+    return result
+
+
+def check_passed(check_json: dict[str, Any] | None) -> bool:
+    if not check_json:
+        return False
+    summary = check_json.get("summary") or {}
+    return (
+        int(summary.get("failed", -1)) == 0
+        and int(summary.get("manual", -1)) == 0
+        and int(summary.get("fixable", -1)) == 0
+    )
+
+
+def report_passed(report_json: dict[str, Any] | None) -> bool:
+    if not report_json:
+        return False
+    summary = report_json.get("summary") or {}
+    return (
+        int(summary.get("failed_checks", -1)) == 0
+        and int(summary.get("sr_errors", -1)) == 0
+        and bool(summary.get("verapdf_checked"))
+        and bool(summary.get("verapdf_passed"))
+        and int(summary.get("verapdf_violations", -1)) == 0
+        and int(summary.get("wcag_fail", -1)) == 0
+    )
+
+
+def validate_one(source: Path, args: argparse.Namespace) -> dict[str, Any]:
+    base = command_base(args)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = slugify(source)
+    output_pdf = out_dir / f"{name}.router_fixed.pdf"
+    fix_log = out_dir / f"{name}.fix.log"
+    check_json_path = out_dir / f"{name}.check.json"
+    report_json_path = out_dir / f"{name}.report.json"
+
+    env = os.environ.copy()
+    fix_cmd = [*base, "fix"]
+    if args.thorough:
+        fix_cmd.append("--thorough")
+    if args.env_file:
+        fix_cmd.extend(["--env", str(args.env_file)])
+    if args.config_file:
+        fix_cmd.extend(["--config", str(args.config_file)])
+    fix_cmd.extend([str(source), "-o", str(output_pdf)])
+
+    record: dict[str, Any] = {
+        "source": str(source),
+        "output": str(output_pdf),
+        "router_env": {key: env.get(key) for key in ROUTER_ENV_KEYS if env.get(key) is not None},
+    }
+
+    if args.skip_existing and output_pdf.exists():
+        record["fix"] = {"skipped_existing": True, "returncode": 0, "timed_out": False}
+    else:
+        record["fix"] = run_command(
+            fix_cmd,
+            timeout=args.fix_timeout,
+            log_path=fix_log,
+            env=env,
+        )
+    record["output_exists"] = output_pdf.exists()
+
+    if output_pdf.exists():
+        check_cmd = [*base, "check"]
+        if args.env_file:
+            check_cmd.extend(["--env", str(args.env_file)])
+        if args.config_file:
+            check_cmd.extend(["--config", str(args.config_file)])
+        check_cmd.extend(["--json", str(output_pdf)])
+        check_run = run_command(
+            check_cmd,
+            timeout=args.check_timeout,
+            log_path=check_json_path,
+            env=env,
+        )
+        check_text = check_json_path.read_text(encoding="utf-8")
+        check_data, check_footer = parse_first_json_object(check_text)
+        record["check"] = {
+            **check_run,
+            "json_path": str(check_json_path),
+            "parsed": check_data is not None,
+            "footer": check_footer,
+            "summary": (check_data or {}).get("summary"),
+            "passed": check_passed(check_data),
+        }
+
+        report_cmd = [
+            *base,
+            "report",
+            str(output_pdf),
+            "--original",
+            str(source),
+            "--json",
+        ]
+        report_run = run_command(
+            report_cmd,
+            timeout=args.report_timeout,
+            log_path=report_json_path,
+            env=env,
+        )
+        report_text = report_json_path.read_text(encoding="utf-8")
+        report_data, report_footer = parse_first_json_object(report_text)
+        record["report"] = {
+            **report_run,
+            "json_path": str(report_json_path),
+            "parsed": report_data is not None,
+            "footer": report_footer,
+            "summary": (report_data or {}).get("summary"),
+            "visual_diff": (report_data or {}).get("visual_diff"),
+            "passed": report_passed(report_data),
+        }
+        record["text_fidelity"] = text_fidelity(source, output_pdf)
+    else:
+        record["check"] = {"passed": False, "parsed": False}
+        record["report"] = {"passed": False, "parsed": False}
+        record["text_fidelity"] = {"available": False, "normalized_text_equal": False}
+
+    text_ok = record.get("text_fidelity", {}).get("normalized_text_equal") is True
+    fix_ok = (
+        record.get("fix", {}).get("returncode") == 0
+        and not record.get("fix", {}).get("timed_out")
+    )
+    record["passed"] = bool(
+        fix_ok
+        and record["output_exists"]
+        and record.get("check", {}).get("passed")
+        and record.get("report", {}).get("passed")
+        and text_ok
+    )
+    return record
+
+
+def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
+    passed = [record for record in records if record.get("passed")]
+    return {
+        "count": len(records),
+        "passed": len(passed),
+        "failed": len(records) - len(passed),
+        "pass_rate": round(len(passed) / len(records), 4) if records else None,
+        "verapdf_passed": sum(
+            bool(((record.get("report") or {}).get("summary") or {}).get("verapdf_passed"))
+            for record in records
+        ),
+        "check_zero_failures": sum(bool((record.get("check") or {}).get("passed")) for record in records),
+        "report_zero_failures": sum(bool((record.get("report") or {}).get("passed")) for record in records),
+        "text_fidelity_passed": sum(
+            (record.get("text_fidelity") or {}).get("normalized_text_equal") is True
+            for record in records
+        ),
+        "failures": [
+            {
+                "source": record.get("source"),
+                "output_exists": record.get("output_exists"),
+                "fix": record.get("fix"),
+                "check_summary": (record.get("check") or {}).get("summary"),
+                "report_summary": (record.get("report") or {}).get("summary"),
+                "text_fidelity": record.get("text_fidelity"),
+            }
+            for record in records
+            if not record.get("passed")
+        ],
+    }
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("sources", nargs="*", help="PDF files to validate")
+    ap.add_argument("--source-list", type=Path, help="text file with one PDF path per line")
+    ap.add_argument("--source-dir", type=Path, help="directory of PDFs to validate")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--out-dir", type=Path, required=True)
+    ap.add_argument("--records-out", type=Path, default=None)
+    ap.add_argument("--summary-out", type=Path, default=None)
+    ap.add_argument("--remedy-pdf-bin", type=Path, default=None)
+    ap.add_argument("--env-file", type=Path, default=None)
+    ap.add_argument("--config-file", type=Path, default=None)
+    ap.add_argument("--fix-timeout", type=int, default=1800)
+    ap.add_argument("--check-timeout", type=int, default=600)
+    ap.add_argument("--report-timeout", type=int, default=600)
+    ap.add_argument("--skip-existing", action="store_true")
+    ap.add_argument("--no-thorough", dest="thorough", action="store_false")
+    ap.set_defaults(thorough=True)
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    records_path = args.records_out or args.out_dir / "heldout_lamc_validation.jsonl"
+    summary_path = args.summary_out or args.out_dir / "heldout_lamc_validation.summary.json"
+    sources = collect_sources(args)
+    if not sources:
+        raise SystemExit("No source PDFs selected")
+
+    records = [validate_one(source, args) for source in sources]
+    summary = summarize(records)
+    summary.update({
+        "sources": [str(source) for source in sources],
+        "records_path": str(records_path),
+        "out_dir": str(args.out_dir),
+    })
+
+    write_jsonl(records_path, records)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    return 0 if summary["failed"] == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

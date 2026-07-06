@@ -659,3 +659,53 @@ def test_router_readiness_combines_adapter_and_metric_gates(tmp_path):
     assert summary["decision"] == "ready_for_heldout_lamc_pipeline_validation"
     assert summary["final_ship_ready"] is False
     assert all(item["passed"] for item in summary["live_router_gates"])
+
+
+def test_heldout_lamc_validation_parses_json_with_token_footer():
+    heldout = load_tool("run_heldout_lamc_validation")
+    payload, footer = heldout.parse_first_json_object(
+        '{"summary":{"failed":0}}\nTokens: 10 in + 2 out = 12 billed'
+    )
+
+    assert payload == {"summary": {"failed": 0}}
+    assert footer == "Tokens: 10 in + 2 out = 12 billed"
+
+
+def test_heldout_lamc_validation_summary_counts_final_gates():
+    heldout = load_tool("run_heldout_lamc_validation")
+    records = [
+        {
+            "source": "pass.pdf",
+            "passed": True,
+            "output_exists": True,
+            "check": {"passed": True, "summary": {"failed": 0}},
+            "report": {
+                "passed": True,
+                "summary": {"verapdf_passed": True, "failed_checks": 0},
+            },
+            "text_fidelity": {"normalized_text_equal": True},
+        },
+        {
+            "source": "fail.pdf",
+            "passed": False,
+            "output_exists": True,
+            "fix": {"returncode": 0},
+            "check": {"passed": False, "summary": {"failed": 1}},
+            "report": {
+                "passed": True,
+                "summary": {"verapdf_passed": True, "failed_checks": 0},
+            },
+            "text_fidelity": {"normalized_text_equal": True},
+        },
+    ]
+
+    summary = heldout.summarize(records)
+
+    assert summary["count"] == 2
+    assert summary["passed"] == 1
+    assert summary["failed"] == 1
+    assert summary["pass_rate"] == 0.5
+    assert summary["verapdf_passed"] == 2
+    assert summary["check_zero_failures"] == 1
+    assert summary["text_fidelity_passed"] == 2
+    assert summary["failures"][0]["source"] == "fail.pdf"
