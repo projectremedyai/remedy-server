@@ -180,6 +180,29 @@ async def test_empty_is_transient_rotates_nodes(monkeypatch):
     assert len([c for c in calls if c[0] == "/chat/completions"]) == 2
 
 
+async def test_openai_compat_response_format_passthrough(monkeypatch):
+    """OpenAI-compatible endpoints receive json_object exactly as requested."""
+    prov = OllamaVisionProvider(
+        base_url="http://local-vllm.test/v1",
+        model="qwen3vl-32b-remedy",
+        retry_backoff_seconds=0.0,
+    )
+
+    def handler(endpoint, body, calls):
+        assert endpoint == "/chat/completions"
+        assert body["response_format"] == {"type": "json_object"}
+        return _FakeResp(_compat_payload('{"ok": true}'))
+
+    calls = _install(monkeypatch, handler)
+    out = await prov.analyze_image(
+        None,
+        "prompt",
+        response_format={"type": "json_object"},
+    )
+    assert out == '{"ok": true}'
+    assert len(calls) == 1
+
+
 async def test_empty_vision_response_is_runtimeerror():
     """EmptyVisionResponse stays a RuntimeError subclass (callers catch broadly)."""
     assert issubclass(EmptyVisionResponse, RuntimeError)

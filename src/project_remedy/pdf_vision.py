@@ -490,7 +490,7 @@ class OllamaVisionProvider:
                     "reasoning_effort": self.reasoning_effort,
                 }
                 if response_format is not None:
-                    payload["response_format"] = {"type": "json_schema", "json_schema": response_format}
+                    payload["response_format"] = response_format
 
             gate = self._endpoint_gate(base_url, self.max_inflight)
             acquired = False
@@ -723,6 +723,8 @@ class OpenAIVisionProvider:
             "max_tokens": max_tokens,
             "temperature": 0.2,
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         async with httpx.AsyncClient(
             base_url=self.base_url,

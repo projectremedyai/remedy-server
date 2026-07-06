@@ -165,6 +165,35 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         ),
     ]
 
+    live_router_gates: list[dict[str, Any]] = []
+    live_router_summary = getattr(args, "live_router_summary", None)
+    if live_router_summary:
+        live = load_json(live_router_summary)
+        valid_by_task = live.get("valid_json_rate_by_task") or {}
+        live_router_gates.extend([
+            gate(
+                "live router errors == 0",
+                live.get("errors"),
+                equals=0,
+                source=str(live_router_summary),
+            ),
+            gate(
+                "live router valid_json_rate >= 0.90",
+                live.get("valid_json_rate"),
+                min_value=0.90,
+                source=str(live_router_summary),
+            ),
+        ])
+        for task in sorted(valid_by_task):
+            live_router_gates.append(
+                gate(
+                    f"live router {task} valid_json_rate >= 0.90",
+                    valid_by_task.get(task),
+                    min_value=0.90,
+                    source=str(live_router_summary),
+                )
+            )
+
     task_gates = {
         "alt_text_quality": alt_gates,
         "table_structure": table_gates,
@@ -174,21 +203,37 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
     }
     metric_gates = [gate_item for gates in task_gates.values() for gate_item in gates]
     metric_gates.extend(production_gates)
+    metric_gates.extend(live_router_gates)
     ready_for_live_smoke = all_passed(adapters) and all_passed(metric_gates)
-    return {
-        "decision": (
+    live_smoke_passed = bool(live_router_gates) and all_passed(live_router_gates)
+    if ready_for_live_smoke and live_smoke_passed:
+        decision = "ready_for_heldout_lamc_pipeline_validation"
+        final_ship_blocker = (
+            "Held-out real LAMC remediation pipeline validation has not been run "
+            "against the live router profile."
+        )
+    else:
+        decision = (
             "ready_for_live_router_smoke"
             if ready_for_live_smoke
             else "not_ready_for_live_router_smoke"
-        ),
+        )
+        final_ship_blocker = (
+            "Live multi-LoRA serving smoke and held-out LAMC pipeline validation have not been run."
+            if ready_for_live_smoke
+            else "One or more adapter, metric, production, or live router gates failed."
+        )
+    return {
+        "decision": decision,
         "final_ship_ready": False,
-        "final_ship_blocker": "Live multi-LoRA serving smoke and held-out LAMC pipeline validation have not been run.",
+        "final_ship_blocker": final_ship_blocker,
         "stable_alias": "qwen3vl-32b-remedy",
         "stable_alias_points_to": "alt-text v2 adapter",
         "task_aliases": TASK_ALIASES,
         "adapters": adapters,
         "task_gates": task_gates,
         "production_gates": production_gates,
+        "live_router_gates": live_router_gates,
     }
 
 
@@ -202,6 +247,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--production-task-metrics",
         type=Path,
         default=Path("eval_runs/runpod_h200_2026-07-06/remedy_multitask_v1.production.task_metrics.json"),
+    )
+    ap.add_argument(
+        "--live-router-summary",
+        type=Path,
+        default=None,
+        help="optional run_vision_eval summary from the live multi-LoRA router",
     )
     ap.add_argument("--alt-adapter", type=Path, default=None)
     ap.add_argument("--table-adapter", type=Path, default=None)
@@ -220,7 +271,10 @@ def main(argv: list[str] | None = None) -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text + "\n", encoding="utf-8")
     print(text)
-    return 0 if summary["decision"] == "ready_for_live_router_smoke" else 1
+    return 0 if summary["decision"] in {
+        "ready_for_live_router_smoke",
+        "ready_for_heldout_lamc_pipeline_validation",
+    } else 1
 
 
 if __name__ == "__main__":

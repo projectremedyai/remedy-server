@@ -640,3 +640,22 @@ def test_router_readiness_combines_adapter_and_metric_gates(tmp_path):
         for gates in summary["task_gates"].values()
         for item in gates
     )
+
+    live_summary = tmp_path / "router_full.production.jsonl.summary.json"
+    live_summary.write_text(json.dumps({
+        "errors": 0,
+        "valid_json_rate": 0.9887,
+        "valid_json_rate_by_task": {
+            "alt_text_quality": 1.0,
+            "contrast": 1.0,
+            "heading_hierarchy": 0.9615,
+            "reading_order": 1.0,
+        },
+    }), encoding="utf-8")
+    args.live_router_summary = live_summary
+
+    summary = readiness.build_summary(args)
+
+    assert summary["decision"] == "ready_for_heldout_lamc_pipeline_validation"
+    assert summary["final_ship_ready"] is False
+    assert all(item["passed"] for item in summary["live_router_gates"])
