@@ -13,7 +13,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from project_remedy.pdf_vision import EmptyVisionResponse, OllamaVisionProvider
+from project_remedy.pdf_vision import (
+    EmptyVisionResponse,
+    OllamaVisionProvider,
+    TaskRoutedVisionProvider,
+    _parse_task_provider_map,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -175,3 +180,85 @@ async def test_empty_is_transient_rotates_nodes(monkeypatch):
 async def test_empty_vision_response_is_runtimeerror():
     """EmptyVisionResponse stays a RuntimeError subclass (callers catch broadly)."""
     assert issubclass(EmptyVisionResponse, RuntimeError)
+
+
+class _RecordingVisionProvider:
+    def __init__(self, name: str, *, fail: bool = False) -> None:
+        self.model = name
+        self.base_url = "http://example.test/v1"
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    async def analyze_image(
+        self,
+        image_path,
+        prompt,
+        *,
+        max_tokens=4096,
+        response_format=None,
+        task=None,
+    ):
+        self.calls.append({
+            "image_path": image_path,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "response_format": response_format,
+            "task": task,
+        })
+        if self.fail:
+            raise RuntimeError(f"{self.model} failed")
+        return f"{self.model}:{task or 'default'}"
+
+
+def test_task_provider_map_accepts_model_and_url_values():
+    assert _parse_task_provider_map(
+        "contrast:qwen3vl-32b-contrast, reading-order:http://host:8000/v1",
+        env_name="TEST_ROUTES",
+    ) == {
+        "contrast": "qwen3vl-32b-contrast",
+        "reading_order": "http://host:8000/v1",
+    }
+
+
+def test_task_provider_map_rejects_malformed_entries():
+    with pytest.raises(ValueError, match="task:value"):
+        _parse_task_provider_map("contrast", env_name="TEST_ROUTES")
+    with pytest.raises(ValueError, match="non-empty"):
+        _parse_task_provider_map("contrast:", env_name="TEST_ROUTES")
+
+
+async def test_task_routed_provider_sends_contrast_to_override():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast")
+    provider = TaskRoutedVisionProvider(primary, {"contrast": contrast})
+
+    assert await provider.analyze_image(None, "prompt", task="contrast") == "contrast:contrast"
+    assert await provider.analyze_image(None, "prompt", task="heading_hierarchy") == (
+        "primary:heading_hierarchy"
+    )
+
+    assert [call["task"] for call in contrast.calls] == ["contrast"]
+    assert [call["task"] for call in primary.calls] == ["heading_hierarchy"]
+
+
+async def test_task_routed_provider_does_not_fallback_by_default():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast", fail=True)
+    provider = TaskRoutedVisionProvider(primary, {"contrast": contrast})
+
+    with pytest.raises(RuntimeError, match="contrast failed"):
+        await provider.analyze_image(None, "prompt", task="contrast")
+    assert primary.calls == []
+
+
+async def test_task_routed_provider_fallback_is_opt_in():
+    primary = _RecordingVisionProvider("primary")
+    contrast = _RecordingVisionProvider("contrast", fail=True)
+    provider = TaskRoutedVisionProvider(
+        primary,
+        {"contrast": contrast},
+        allow_fallback=True,
+    )
+
+    assert await provider.analyze_image(None, "prompt", task="contrast") == "primary:contrast"
+    assert [call["task"] for call in primary.calls] == ["contrast"]

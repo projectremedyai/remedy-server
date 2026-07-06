@@ -8,6 +8,7 @@ import json
 import os
 import random
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -49,7 +50,38 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     )
 
 
-def build(out_dir: Path, dataset_dirs: list[Path], seed: int) -> dict:
+def parse_task_weight(raw: str) -> tuple[str, int]:
+    if "=" not in raw:
+        raise argparse.ArgumentTypeError("task weights must use task=integer")
+    task, value = raw.split("=", 1)
+    task = task.strip()
+    if not task:
+        raise argparse.ArgumentTypeError("task weights require a task name")
+    try:
+        weight = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("task weights must be integers") from exc
+    if weight < 1:
+        raise argparse.ArgumentTypeError("task weights must be >= 1")
+    return task, weight
+
+
+def weighted_train_rows(rows: list[dict], task_weights: dict[str, int]) -> list[dict]:
+    weighted: list[dict] = []
+    for row in rows:
+        weight = task_weights.get(task_of(row), 1)
+        for _ in range(weight):
+            weighted.append(deepcopy(row))
+    return weighted
+
+
+def build(
+    out_dir: Path,
+    dataset_dirs: list[Path],
+    seed: int,
+    task_weights: dict[str, int] | None = None,
+) -> dict:
+    task_weights = task_weights or {}
     train: list[dict] = []
     val: list[dict] = []
     included = []
@@ -74,6 +106,9 @@ def build(out_dir: Path, dataset_dirs: list[Path], seed: int) -> dict:
     if not included:
         raise SystemExit("No dataset dirs with train.jsonl and val.jsonl were found")
 
+    original_train_counts = Counter(task_of(row) for row in train)
+    train = weighted_train_rows(train, task_weights)
+
     rng = random.Random(seed)
     rng.shuffle(train)
     rng.shuffle(val)
@@ -83,6 +118,8 @@ def build(out_dir: Path, dataset_dirs: list[Path], seed: int) -> dict:
         "seed": seed,
         "train": len(train),
         "val": len(val),
+        "task_weights": task_weights,
+        "tasks_train_unweighted": dict(original_train_counts),
         "tasks_train": dict(Counter(task_of(row) for row in train)),
         "tasks_val": dict(Counter(task_of(row) for row in val)),
         "included": included,
@@ -101,8 +138,11 @@ def main() -> int:
     ap.add_argument("--datasets", nargs="*", type=Path,
                     default=[Path(p) for p in DEFAULT_DATASETS])
     ap.add_argument("--seed", type=int, default=20260705)
+    ap.add_argument("--task-weight", action="append", type=parse_task_weight, default=[],
+                    help="Duplicate train rows for a task, e.g. contrast=6. "
+                         "Validation rows are never weighted.")
     args = ap.parse_args()
-    manifest = build(args.out_dir, args.datasets, args.seed)
+    manifest = build(args.out_dir, args.datasets, args.seed, dict(args.task_weight))
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return 0
 

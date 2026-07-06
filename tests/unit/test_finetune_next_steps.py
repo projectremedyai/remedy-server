@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 from PIL import Image
@@ -136,6 +137,64 @@ def test_multitask_union_preserves_resolvable_relative_image_paths(tmp_path):
     assert (out / image_rel).resolve().exists()
 
 
+def test_multitask_union_weights_train_rows_only(tmp_path):
+    union = load_tool("build_multitask_dataset")
+    source = tmp_path / "data_mixed"
+    renders = source / "renders"
+    renders.mkdir(parents=True)
+    Image.new("RGB", (20, 20), (255, 255, 255)).save(renders / "sample.png")
+
+    def row(task: str, variant: str) -> dict:
+        return {
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image", "image": "renders/sample.png"},
+                    {"type": "text", "text": "prompt"},
+                ]},
+                {"role": "assistant", "content": [{"type": "text", "text": "{\"status\":\"pass\"}"}]},
+            ],
+            "meta": {"doc_id": f"{task}-{variant}", "page": 1, "task": task, "variant": variant},
+        }
+
+    train_rows = [
+        row("contrast", "fail"),
+        row("contrast", "pass"),
+        row("table_structure", "pass"),
+    ]
+    val_rows = [
+        row("contrast", "fail"),
+        row("table_structure", "pass"),
+    ]
+    (source / "train.jsonl").write_text(
+        "\n".join(json.dumps(item) for item in train_rows) + "\n",
+        encoding="utf-8",
+    )
+    (source / "val.jsonl").write_text(
+        "\n".join(json.dumps(item) for item in val_rows) + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = union.build(
+        tmp_path / "weighted",
+        [source],
+        seed=1,
+        task_weights={"contrast": 3},
+    )
+
+    assert manifest["tasks_train_unweighted"] == {
+        "contrast": 2,
+        "table_structure": 1,
+    }
+    assert manifest["tasks_train"] == {
+        "contrast": 6,
+        "table_structure": 1,
+    }
+    assert manifest["tasks_val"] == {
+        "contrast": 1,
+        "table_structure": 1,
+    }
+
+
 def test_generate_predictions_rows_align_with_eval_metrics(tmp_path):
     gen = load_tool("generate_predictions_hf")
     metrics = load_tool("eval_task_metrics")
@@ -210,3 +269,39 @@ def test_eval_metrics_prefers_same_order_predictions_for_duplicate_keys(tmp_path
 
     summary = metrics.summarize(scores)
     assert summary["by_task"]["table_structure"]["status_accuracy"] == 1.0
+
+
+def test_train_lora_init_adapter_loads_existing_adapter_as_trainable(monkeypatch, tmp_path):
+    trainer = load_tool("train_lora_vision_hf")
+    calls = {}
+
+    class FakePeftModel:
+        @staticmethod
+        def from_pretrained(model, path, is_trainable=False):
+            calls["model"] = model
+            calls["path"] = path
+            calls["is_trainable"] = is_trainable
+            return "attached-adapter"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "peft",
+        types.SimpleNamespace(PeftModel=FakePeftModel),
+    )
+    base_model = object()
+    adapter_dir = tmp_path / "adapter"
+
+    attached = trainer._attach_or_create_lora(
+        base_model,
+        init_adapter=adapter_dir,
+        rank=16,
+        alpha=32,
+        tune_vision=False,
+    )
+
+    assert attached == "attached-adapter"
+    assert calls == {
+        "model": base_model,
+        "path": str(adapter_dir),
+        "is_trainable": True,
+    }

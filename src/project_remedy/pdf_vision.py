@@ -147,6 +147,7 @@ class VisionProvider(Protocol):
         *,
         max_tokens: int = 4096,
         response_format: dict | None = None,
+        task: str | None = None,
     ) -> str:
         """Send an image + prompt to the vision model and return the response."""
         ...
@@ -417,6 +418,7 @@ class OllamaVisionProvider:
         *,
         max_tokens: int = 4096,
         response_format: dict | None = None,
+        task: str | None = None,
     ) -> str:
         import httpx
 
@@ -647,6 +649,7 @@ class FallbackVisionProvider:
         *,
         max_tokens: int = 4096,
         response_format: dict | None = None,
+        task: str | None = None,
     ) -> str:
         failures: list[str] = []
         for provider in self.providers:
@@ -656,6 +659,7 @@ class FallbackVisionProvider:
                     prompt,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    task=task,
                 )
                 if str(response).strip():
                     return response
@@ -689,6 +693,7 @@ class OpenAIVisionProvider:
         *,
         max_tokens: int = 4096,
         response_format: dict | None = None,
+        task: str | None = None,
     ) -> str:
         import httpx
 
@@ -738,6 +743,71 @@ class OpenAIVisionProvider:
             if not str(response_text).strip():
                 raise RuntimeError("empty vision response")
             return response_text
+
+
+class TaskRoutedVisionProvider:
+    """Route selected vision tasks to task-specific model providers."""
+
+    def __init__(
+        self,
+        primary: VisionProvider,
+        task_providers: dict[str, VisionProvider],
+        *,
+        allow_fallback: bool = False,
+    ) -> None:
+        if not task_providers:
+            raise ValueError("TaskRoutedVisionProvider requires task providers")
+        self.primary = primary
+        self.task_providers = {
+            _normalize_task_name(task): provider
+            for task, provider in task_providers.items()
+        }
+        self.allow_fallback = allow_fallback
+        self.model = str(getattr(primary, "model", "unknown"))
+        self.base_url = str(getattr(primary, "base_url", ""))
+
+    async def analyze_image(
+        self,
+        image_path: Path | None,
+        prompt: str,
+        *,
+        max_tokens: int = 4096,
+        response_format: dict | None = None,
+        task: str | None = None,
+    ) -> str:
+        route_key = _normalize_task_name(task or "")
+        provider = self.task_providers.get(route_key)
+        if provider is None:
+            return await self.primary.analyze_image(
+                image_path,
+                prompt,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                task=task,
+            )
+        try:
+            return await provider.analyze_image(
+                image_path,
+                prompt,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                task=task,
+            )
+        except Exception:
+            if not self.allow_fallback:
+                raise
+            logger.warning(
+                "Task-specific vision provider failed for %s; falling back to primary",
+                route_key,
+                exc_info=True,
+            )
+            return await self.primary.analyze_image(
+                image_path,
+                prompt,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                task=task,
+            )
 
 
 def create_provider(
@@ -804,9 +874,38 @@ def _configured_vision_timeout(default: float = 120.0) -> float:
     return default
 
 
+def _env_bool(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 def _env_csv(name: str) -> list[str]:
     raw = os.environ.get(name, "")
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _normalize_task_name(task: str) -> str:
+    return str(task or "").strip().lower().replace("-", "_")
+
+
+def _parse_task_provider_map(raw: str, *, env_name: str) -> dict[str, str]:
+    """Parse comma-separated task:value overrides from an env var."""
+    routes: dict[str, str] = {}
+    for item in str(raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(f"{env_name} entry must be task:value, got {item!r}")
+        task, value = item.split(":", 1)
+        task = _normalize_task_name(task)
+        value = value.strip()
+        if not task or not value:
+            raise ValueError(f"{env_name} entry must include non-empty task and value")
+        routes[task] = value
+    return routes
 
 
 def create_provider_from_config(config) -> VisionProvider | None:
@@ -832,30 +931,66 @@ def create_provider_from_config(config) -> VisionProvider | None:
         reasoning_effort=reasoning_effort,
     )
 
-    fallback_models = _env_csv("OLLAMA_VISION_FALLBACK_MODELS")
-    if not fallback_models:
-        return primary_provider
+    provider: VisionProvider = primary_provider
 
+    fallback_models = _env_csv("OLLAMA_VISION_FALLBACK_MODELS")
     fallback_urls = _env_csv("OLLAMA_VISION_FALLBACK_BASE_URLS")
-    providers: list[VisionProvider] = [primary_provider]
-    for index, fallback_model in enumerate(fallback_models):
-        if index < len(fallback_urls):
-            fallback_url = fallback_urls[index]
-        elif fallback_urls:
-            fallback_url = fallback_urls[-1]
-        else:
-            fallback_url = primary
-        providers.append(
-            OllamaVisionProvider(
-                base_url=fallback_url,
-                api_key=api_key,
-                model=fallback_model,
-                timeout_seconds=timeout_seconds,
-                stream=stream,
-                reasoning_effort=reasoning_effort,
+    if fallback_models:
+        providers: list[VisionProvider] = [primary_provider]
+        for index, fallback_model in enumerate(fallback_models):
+            if index < len(fallback_urls):
+                fallback_url = fallback_urls[index]
+            elif fallback_urls:
+                fallback_url = fallback_urls[-1]
+            else:
+                fallback_url = primary
+            providers.append(
+                OllamaVisionProvider(
+                    base_url=fallback_url,
+                    api_key=api_key,
+                    model=fallback_model,
+                    timeout_seconds=timeout_seconds,
+                    stream=stream,
+                    reasoning_effort=reasoning_effort,
+                )
             )
+        provider = FallbackVisionProvider(providers)
+
+    task_models = _parse_task_provider_map(
+        os.environ.get("OLLAMA_VISION_TASK_MODELS", ""),
+        env_name="OLLAMA_VISION_TASK_MODELS",
+    )
+    if not task_models:
+        return provider
+
+    task_base_urls = _parse_task_provider_map(
+        os.environ.get("OLLAMA_VISION_TASK_BASE_URLS", ""),
+        env_name="OLLAMA_VISION_TASK_BASE_URLS",
+    )
+    unknown_url_tasks = sorted(set(task_base_urls) - set(task_models))
+    if unknown_url_tasks:
+        joined = ", ".join(unknown_url_tasks)
+        raise ValueError(
+            "OLLAMA_VISION_TASK_BASE_URLS contains task(s) without models: "
+            f"{joined}"
         )
-    return FallbackVisionProvider(providers)
+
+    task_providers = {
+        task: OllamaVisionProvider(
+            base_url=task_base_urls.get(task, primary),
+            api_key=api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            stream=stream,
+            reasoning_effort=reasoning_effort,
+        )
+        for task, model in task_models.items()
+    }
+    return TaskRoutedVisionProvider(
+        provider,
+        task_providers,
+        allow_fallback=_env_bool("OLLAMA_VISION_ROUTER_ALLOW_FALLBACK"),
+    )
 
 
 def create_escalation_provider(config) -> VisionProvider | None:
@@ -1410,6 +1545,7 @@ class ReadingOrderVisionAgent:
             response = await self._provider.analyze_image(
                 image_path,
                 build_reading_order_prompt(structure_order=structure_order),
+                task="reading_order",
             )
             parsed = _parse_json_response(response)
             issues: list[ReadingOrderIssue] = []
@@ -1447,6 +1583,7 @@ class HeadingHierarchyVisionAgent:
             response = await self._provider.analyze_image(
                 image_path,
                 heading_hierarchy_quality_prompt(logical_order=logical_order),
+                task="heading_hierarchy",
             )
             parsed = _parse_json_response(response)
             issues: list[HeadingIssue] = []
@@ -1550,6 +1687,7 @@ class AltTextQualityVisionAgent:
             response = await self._provider.analyze_image(
                 image_path,
                 page_alt_text_quality_prompt(figure_list=figure_list),
+                task="alt_text_quality",
             )
             parsed = _parse_json_response(response)
             issues: list[AltTextIssue] = []
@@ -1746,6 +1884,7 @@ class VisionAnalyzer:
                 response = await self._provider.analyze_image(
                     image_path,
                     build_contrast_detection_prompt("AA"),
+                    task="contrast",
                 )
                 result.raw_responses[page_num] = response
 

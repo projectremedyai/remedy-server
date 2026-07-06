@@ -96,6 +96,30 @@ def _lora_targets(model, tune_vision: bool) -> list[str]:
     return targets
 
 
+def _attach_or_create_lora(
+    model,
+    *,
+    init_adapter: Path | None,
+    rank: int,
+    alpha: int,
+    tune_vision: bool,
+):
+    if init_adapter is not None:
+        from peft import PeftModel
+
+        print(f"[train-hf] continuing from adapter={init_adapter}")
+        return PeftModel.from_pretrained(model, str(init_adapter), is_trainable=True)
+
+    from peft import LoraConfig, get_peft_model
+
+    targets = _lora_targets(model, tune_vision)
+    print(f"[train-hf] LoRA on {len(targets)} Linear modules "
+          f"({'incl' if tune_vision else 'excl'} vision tower)")
+    lora = LoraConfig(r=rank, lora_alpha=alpha, lora_dropout=0.0,
+                      bias="none", task_type="CAUSAL_LM", target_modules=targets)
+    return get_peft_model(model, lora)
+
+
 class VisionCollator:
     """Build processor inputs + labels; mask the prompt so we train only on the
     assistant JSON. Relies on the chat-template prompt (add_generation_prompt=True)
@@ -193,12 +217,13 @@ def main() -> int:
                     help="Load the base in 4-bit NF4 with bitsandbytes. "
                          "Use only for QLoRA experiments on smaller GPUs; the "
                          "ship path remains bf16 unless the A/B fully matches.")
+    ap.add_argument("--init-adapter", type=Path, default=None,
+                    help="Continue training from an existing PEFT adapter.")
     args = ap.parse_args()
 
     import torch
     from transformers import (AutoProcessor, AutoModelForImageTextToText,
                               Trainer, TrainingArguments)
-    from peft import LoraConfig, get_peft_model
 
     dev = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU!"
     mode = "qlora-4bit" if args.qlora else "bf16"
@@ -222,12 +247,13 @@ def main() -> int:
             attn_implementation="sdpa")
         model.config.use_cache = False
 
-    targets = _lora_targets(model, args.tune_vision_layers)
-    print(f"[train-hf] LoRA on {len(targets)} Linear modules "
-          f"({'incl' if args.tune_vision_layers else 'excl'} vision tower)")
-    lora = LoraConfig(r=args.rank, lora_alpha=args.alpha, lora_dropout=0.0,
-                      bias="none", task_type="CAUSAL_LM", target_modules=targets)
-    model = get_peft_model(model, lora)
+    model = _attach_or_create_lora(
+        model,
+        init_adapter=args.init_adapter,
+        rank=args.rank,
+        alpha=args.alpha,
+        tune_vision=args.tune_vision_layers,
+    )
     model.enable_input_require_grads()  # needed for gradient checkpointing + PEFT
     model.print_trainable_parameters()
 
