@@ -148,7 +148,6 @@ class ContentExtractor:
         """Extract DOCX content using python-docx, with vision OCR fallback."""
         try:
             from docx import Document as DocxDocument  # type: ignore[import-untyped]
-            from docx.opc.constants import RELATIONSHIP_TYPE as RT  # type: ignore[import-untyped]
         except ImportError:
             logger.warning(
                 "python-docx not installed — falling back to vision OCR for %s",

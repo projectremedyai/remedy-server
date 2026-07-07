@@ -39,7 +39,7 @@ def _adv_by_gid(tt):
         out[gid] = int(round(w * 1000.0 / upm))
     return out
 
-def _cid_to_gid(cidfont, nglyphs):
+def _cid_to_gid(cidfont):
     m = cidfont.get("/CIDToGIDMap")
     if m is None or m == pikepdf.Name("/Identity"):
         return lambda cid: cid                       # Identity
@@ -92,7 +92,7 @@ def fix(inp, outp):
                     continue
                 adv_gid = _adv_by_gid(tt)
                 ng = tt["maxp"].numGlyphs if "maxp" in tt else max(adv_gid, default=0)+1
-                c2g = _cid_to_gid(cidfont, ng)
+                c2g = _cid_to_gid(cidfont)
                 # widths for every CID whose GID has an advance
                 adv_cid = {}
                 for cid in range(ng):

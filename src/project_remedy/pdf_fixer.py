@@ -7927,6 +7927,7 @@ def _detect_headings_vision_batch(
         return {}
 
     pdf_path = Path(str(pdf_path))
+    pages_to_vision = _sample_vision_page_indices(pages_to_vision)
 
     # For large docs, pre-filter pages to skip dense body copy
     if len(pages_to_vision) > 30:
@@ -7955,7 +7956,11 @@ def _detect_headings_vision_batch(
                     render_page_to_image, pdf_path, page_idx + 1, 150,
                 )
             async with vision_sem:
-                response = await vision_provider.analyze_image(image_path, prompt)
+                response = await vision_provider.analyze_image(
+                    image_path,
+                    prompt,
+                    task="heading_hierarchy",
+                )
             parsed = _parse_json_response(response)
             if isinstance(parsed, list):
                 return page_idx, parsed
@@ -7991,6 +7996,26 @@ def _detect_headings_vision_batch(
         return all_results
 
     return _run_async_callable_blocking(_run)
+
+
+def _sample_vision_page_indices(pages: list[int]) -> list[int]:
+    """Bound expensive fixer-time vision scans when VISION_PAGE_SAMPLE_SIZE is set."""
+    if len(pages) <= 1:
+        return pages
+    raw = os.environ.get("VISION_PAGE_SAMPLE_SIZE", "").strip()
+    if not raw:
+        return pages
+    try:
+        budget = int(raw)
+    except ValueError:
+        return pages
+    if budget <= 0 or len(pages) <= budget:
+        return pages
+    if budget == 1:
+        return [pages[0]]
+    step = (len(pages) - 1) / (budget - 1)
+    sampled = [pages[round(i * step)] for i in range(budget)]
+    return sorted(set(sampled))
 
 
 def _match_heading_to_struct_node(

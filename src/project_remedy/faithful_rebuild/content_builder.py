@@ -247,7 +247,6 @@ def rebuild_page_preserving(
     target_page: pikepdf.Page,
     *,
     semantic_map: object | None = None,
-    font_registry: dict[str, PreparedFont] | None = None,
 ) -> MCIDManifest:
     """Rebuild a page's content stream with proper BDC/EMC tagging.
 
@@ -262,8 +261,6 @@ def rebuild_page_preserving(
         target_page: The target page to write into.
         semantic_map: Optional semantic map (reserved for future use by the
                       vision planner).
-        font_registry: Optional dict of :class:`PreparedFont` objects keyed
-                       by resource key (reserved for future font handling).
 
     Returns:
         An :class:`MCIDManifest` describing all MCIDs emitted on the page.

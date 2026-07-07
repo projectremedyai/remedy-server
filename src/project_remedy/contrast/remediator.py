@@ -22,8 +22,6 @@ from pikepdf import Name
 from project_remedy.content_stream.parser import GraphicsStateTracker
 from project_remedy.content_stream.modifier import ContentStreamModifier, ColorModification
 from project_remedy.contrast.color_utils import (
-    cmyk_to_rgb,
-    gray_to_rgb,
     nearest_passing_color,
     contrast_ratio,
 )

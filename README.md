@@ -100,6 +100,21 @@ curl -OJ http://127.0.0.1:8000/v1/jobs/<id>/report    # HTML conformance report
 curl -X POST http://127.0.0.1:8000/v1/convert/pdf-to-html -F "file=@input.pdf"
 ```
 
+### Example: re-remediate a corpus with the Qwen3-VL LoRA router
+
+For a large PDF corpus such as the downloaded `lamission.edu` set, use
+[`runbooks/lamission-router-remediation.md`](runbooks/lamission-router-remediation.md).
+
+The recommended first pass is **default sampled router remediation**: serve the
+Qwen3-VL-32B LoRA adapters behind an OpenAI-compatible RunPod endpoint, configure
+`VISION_BASE_URL` plus `OLLAMA_VISION_TASK_MODELS`, then run
+`tools/remediate_pdf_corpus.py` with document-level sharding and `--resume`.
+Spin up or connect to a RunPod GPU pod first; the runbook assumes a 1x H200
+pod with persistent storage for the base model cache, LoRA adapters, logs, and
+optional corpus outputs.
+Do not use `tools/batch_remediate.py` for that objective; it intentionally calls
+the CLI with `--no-vision`.
+
 ---
 
 ## Endpoints
@@ -225,6 +240,11 @@ All env-driven. See `.env.example` for the full list. Key knobs:
   `QUALITY_JUDGE_MODEL=mistral-large-3:675b` and
   `BEHAVIORAL_TEST_MODEL=gemma4:31b-cloud`.
   Runtime checks reject same-family judge or behavioral models.
+- Task-routed vision adapters: `VISION_BASE_URL`, `OLLAMA_VISION_MODEL`,
+  `OLLAMA_VISION_TASK_MODELS`, `OLLAMA_VISION_TASK_BASE_URLS`,
+  `OLLAMA_VISION_ROUTER_ALLOW_FALLBACK`, `OLLAMA_VISION_MAX_INFLIGHT`,
+  `OLLAMA_VISION_GATE_TIMEOUT_SECONDS`, `OLLAMA_VISION_MAX_TOKENS`.
+  See the LAMission corpus runbook for the production router profile.
 - Ghostscript: `GHOSTSCRIPT_ENABLED`, `GHOSTSCRIPT_PATH`
 - veraPDF: `VERAPDF_PATH`
 - EPUB validation: `EPUBCHECK_PATH`, `ACE_PATH`. Missing validators are recorded as skipped in job metadata.

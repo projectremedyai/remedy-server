@@ -69,7 +69,11 @@ Thumbs.db
 *.swo
 
 # Research docs and references (not needed for app to run)
-docs/
+docs/*
+!docs/prds/
+docs/prds/*
+!docs/prds/PRD_vlm_multi_lora_serving.md
+!docs/prds/SPEC_vlm_multi_lora_serving.md
 
 # OneDrive artifacts
 ~$*
@@ -98,6 +102,8 @@ scripts/laccd_smoke_batch.py
 !src/project_remedy/behavioral_proxies/**/prompts/*.md
 !src/project_remedy/quality_judges/**/prompts/
 !src/project_remedy/quality_judges/**/prompts/*.md
+!docs/prds/PRD_vlm_multi_lora_serving.md
+!docs/prds/SPEC_vlm_multi_lora_serving.md
 doc/
 knowledge-base/
 knowledge_base/
@@ -110,6 +116,8 @@ test_*.py
 *.test.*
 *.spec.*
 !README.md
+!runbooks/
+!runbooks/*.md
 !src/**/*.py
 !backend/**/*.py
 !tools/**/*.py

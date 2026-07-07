@@ -234,7 +234,7 @@ def _time_limit(seconds: int):
         yield
         return
 
-    def _handler(signum, frame):
+    def _handler(_signum, _frame):
         raise _TimeoutError(f"per-file timeout after {seconds}s")
 
     old = signal.signal(signal.SIGALRM, _handler)
@@ -301,12 +301,12 @@ def run(args: argparse.Namespace) -> int:
     output_root = Path(args.output_root).expanduser()
     manifest_path = Path(args.manifest).expanduser()
     config = load_config()
-    fix_config = (
-        None
-        if os.environ.get("PDF_CORPUS_FIX_WITHOUT_VISION", "").lower()
+    no_vision = bool(getattr(args, "no_vision", False)) or (
+        os.environ.get("PDF_CORPUS_FIX_WITHOUT_VISION", "").lower()
         in {"1", "true", "yes"}
-        else config
     )
+    fix_config = None if no_vision else config
+    acceptance_config = None if no_vision else config
     latest_records = _manifest_latest(manifest_path) if args.resume else {}
     done = _manifest_done(manifest_path) if args.resume else set()
     files = _source_files(input_roots)
@@ -340,7 +340,11 @@ def run(args: argparse.Namespace) -> int:
                 # original_path=None: skip page-by-page visual-diff / text
                 # similarity (a baseline compares the file to itself — pure
                 # waste). Classification only needs checker + tag tree + veraPDF.
-                acceptance = evaluate_pdf_acceptance(source, config=config, original_path=None)
+                acceptance = evaluate_pdf_acceptance(
+                    source,
+                    config=acceptance_config,
+                    original_path=None,
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"    classify error: {exc}", flush=True)
             level_result = _classify(source, acceptance)
@@ -420,7 +424,7 @@ def run(args: argparse.Namespace) -> int:
                 fix_skipped.extend(report.skipped)
 
             print("    stage=acceptance", flush=True)
-            acceptance, clean = _evaluate(source, output, config)
+            acceptance, clean = _evaluate(source, output, acceptance_config)
             if not clean and not args.audit_only:
                 residue = (
                     acceptance.verapdf_result.violations
@@ -456,7 +460,7 @@ def run(args: argparse.Namespace) -> int:
                     fix_changes.extend(report.changes)
                     fix_skipped.extend(report.skipped)
                     print("    stage=reacceptance", flush=True)
-                    acceptance, clean = _evaluate(source, output, config)
+                    acceptance, clean = _evaluate(source, output, acceptance_config)
 
             # When the failure is font-clause-only, mark it for the manual
             # font-remediation queue (the engine has no path that fixes 7.21.x).
@@ -560,6 +564,12 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument(
+        "--no-vision",
+        action="store_true",
+        help="Disable vision during both fixing and acceptance. Useful for "
+             "deterministic pre-RunPod corpus prep.",
+    )
     parser.add_argument(
         "--classify-only",
         action="store_true",

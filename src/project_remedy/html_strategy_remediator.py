@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any
 
-from bs4 import BeautifulSoup, Comment, Doctype, NavigableString, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 logger = logging.getLogger(__name__)
 

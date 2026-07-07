@@ -1189,7 +1189,6 @@ class HTMLConverter:
                 companion_relative_path=self._section_relative_path(job.url, section.anchor),
                 include_disclosure=structured.is_long_document,
                 section_index=index,
-                section_count=len(structured.sections),
             )
             for index, section in enumerate(structured.sections, start=1)
         ]
@@ -1411,7 +1410,6 @@ class HTMLConverter:
         companion_relative_path: str,
         include_disclosure: bool,
         section_index: int,
-        section_count: int,
     ) -> str:
         """Render a major section for the canonical page."""
         section_content = self._render_section_content(section=section, body_html=body_html)

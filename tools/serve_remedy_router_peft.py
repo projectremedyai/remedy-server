@@ -105,9 +105,12 @@ class RouterState:
             tokenize=False,
             add_generation_prompt=True,
         )
-        inputs = self.processor(text=[text], images=images, return_tensors="pt").to(
-            self.model.device
-        )
+        if images:
+            inputs = self.processor(text=[text], images=images, return_tensors="pt").to(
+                self.model.device
+            )
+        else:
+            inputs = self.processor(text=[text], return_tensors="pt").to(self.model.device)
         with self.lock, torch.inference_mode():
             self.model.set_adapter(adapter_name)
             out = self.model.generate(
@@ -196,7 +199,9 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or "0")
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            started = time.time()
             model_name, text = state.generate(payload)
+            elapsed = time.time() - started
             now = int(time.time())
             self._send_json(
                 HTTPStatus.OK,
@@ -213,6 +218,11 @@ class OpenAIHandler(BaseHTTPRequestHandler):
                         }
                     ],
                 },
+            )
+            print(
+                f"[serve-peft] model={model_name} status=200 "
+                f"elapsed={elapsed:.2f}s chars={len(text)}",
+                flush=True,
             )
         except Exception as exc:  # noqa: BLE001
             print(
