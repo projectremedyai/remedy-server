@@ -8331,7 +8331,7 @@ def _ensure_first_page_metadata_title_heading(pdf: pikepdf.Pdf) -> tuple[int, in
 
     demoted = 0
     for node in first_page_headings:
-        if not _structure_node_text(node):
+        if not _heading_has_renderable_text(node):
             node["/S"] = pikepdf.Name("/P")
             demoted += 1
     return 1, demoted
@@ -9302,6 +9302,75 @@ def _append_actual_text_list(
         _append_struct_child(list_elem, li)
 
 
+def _tag_text_printable_ratio(text: str) -> float:
+    """Fraction of characters that are ordinary printable text (not mojibake).
+
+    Badly-encoded (e.g. UTF-16-decoded-as-Latin1) tag text is riddled with NUL
+    and control characters, so a low ratio is a reliable garble signal.
+    """
+    if not text:
+        return 1.0
+    ok = sum(
+        1
+        for ch in text
+        if ch in " \t\r\n" or (ch.isprintable() and ch != "�")
+    )
+    return ok / len(text)
+
+
+def _visible_text_scaffold_skip_pages(
+    pdf_path: Path,
+    *,
+    min_printable: float = 0.90,
+    min_coverage: float = 0.75,
+) -> set[int]:
+    """Pages already well-tagged with clean text that must NOT be scaffolded.
+
+    The visible-text scaffold exists to rebuild pages whose existing tags carry
+    garbled/mojibake text or genuinely miss most of the page's words. On a page
+    that is already cleanly and adequately tagged it does harm: it appends a
+    second, parallel copy of the content under new ``/Sect`` nodes (duplicating
+    the reading order and the headings, and — because it downgrades the original
+    ``P``/``H`` nodes to ``/Span`` — moving the authoritative headings into the
+    scaffold copy).
+
+    A page is treated as already-good, and therefore skipped, when its existing
+    tagged text is mostly printable (not garbled) AND already covers the bulk of
+    the visible text on the page. Genuinely garbled pages (low printable ratio)
+    and genuinely sparse pages (tags cover little of the visible text) are left
+    for the scaffold, preserving its intended behavior.
+    """
+    try:
+        from project_remedy.tag_tree_reader import read_tag_tree
+
+        report = read_tag_tree(pdf_path)
+    except Exception:
+        return set()
+
+    page_tagged: dict[int, list[str]] = defaultdict(list)
+    for node in report.nodes:
+        text = node.text or node.alt_text or ""
+        if text:
+            page_tagged[node.page].append(text)
+
+    skip: set[int] = set()
+    for page_idx, parts in page_tagged.items():
+        tagged_text = " ".join(parts)
+        if _tag_text_printable_ratio(tagged_text) <= min_printable:
+            continue  # garbled tags — the scaffold is meant for this page
+        try:
+            entries = _visible_text_line_entries_for_page(pdf_path, page_idx)
+        except Exception:
+            continue
+        visible_chars = len("".join("".join(e.text for e in entries).split()))
+        if visible_chars == 0:
+            continue
+        tagged_chars = len("".join(tagged_text.split()))
+        if tagged_chars / visible_chars >= min_coverage:
+            skip.add(page_idx)
+    return skip
+
+
 def fix_sparse_visible_text_structure(pdf: pikepdf.Pdf) -> list[str]:
     """Create a semantic text scaffold when visible text is richer than tags.
 
@@ -9372,11 +9441,17 @@ def fix_sparse_visible_text_structure(pdf: pikepdf.Pdf) -> list[str]:
         if stype in textish_tags:
             text_nodes_by_page.setdefault(page_idx, []).append(node)
 
+    # Skip pages that are already cleanly and adequately tagged — scaffolding
+    # them only duplicates their content (see _visible_text_scaffold_skip_pages).
+    scaffold_skip_pages = _visible_text_scaffold_skip_pages(pdf_path)
+
     visible_entries_by_page: dict[int, list[_VisibleLine]] = {}
     visible_lines_by_page: dict[int, list[str]] = {}
     candidates: list[int] = []
     for idx, count in page_counts.items():
         if idx in synthetic_pages:
+            continue
+        if idx in scaffold_skip_pages:
             continue
         entries = _visible_text_line_entries_for_page(pdf_path, idx)
         lines = [entry.text for entry in entries]
@@ -9958,6 +10033,43 @@ def _structure_node_text(node: pikepdf.Dictionary) -> str:
     return ""
 
 
+def _heading_has_renderable_text(node: pikepdf.Dictionary) -> bool:
+    """Whether a heading node has text a screen reader would actually speak.
+
+    ``_structure_node_text`` only inspects ``/ActualText``, ``/Alt`` and ``/T``,
+    so a heading whose text lives in MCID marked content (the common case) or in
+    a child ``Span``/``P`` looks empty to it. The empty-heading demotion passes
+    must not treat such headings as blank — doing so silently destroys valid
+    document structure. Treat a heading as having text when it carries
+    ActualText/Alt/T, owns marked content (MCIDs), or has any descendant struct
+    element that does.
+    """
+    if _structure_node_text(node):
+        return True
+    if _get_node_mcids(node):
+        return True
+    stack: list = []
+    kids = node.get("/K")
+    if kids is not None:
+        stack.extend(list(kids) if isinstance(kids, pikepdf.Array) else [kids])
+    visited = 0
+    while stack and visited < 256:
+        visited += 1
+        item = stack.pop()
+        try:
+            resolved = _resolve_pdf_object(item)
+        except Exception:
+            continue
+        if not isinstance(resolved, pikepdf.Dictionary):
+            continue
+        if _structure_node_text(resolved) or _get_node_mcids(resolved):
+            return True
+        sub = resolved.get("/K")
+        if sub is not None:
+            stack.extend(list(sub) if isinstance(sub, pikepdf.Array) else [sub])
+    return False
+
+
 def _invoice_text_corpus(
     pdf: pikepdf.Pdf,
     page_nodes: dict[int, list[pikepdf.Dictionary]],
@@ -10162,6 +10274,7 @@ def _fix_subtitle_and_transitional_headings(pdf: pikepdf.Pdf) -> list[str]:
             text = _structure_node_text(node)
             if (
                 not text
+                and not _heading_has_renderable_text(node)
                 and (
                     page_idx in pages_with_text_headings
                     or any(_structure_node_text(candidate) for candidate in nodes)

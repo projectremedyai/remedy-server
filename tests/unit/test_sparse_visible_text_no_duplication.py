@@ -10,16 +10,15 @@ content therefore ends up in the tag tree twice, which the reading-order judge
 correctly flags as ``page_order_backtracking`` + repeated-content, and the
 heading judge flags as ``duplicate_heading``.
 
-This test is marked ``xfail`` because the fix (either narrowing the candidate
-trigger so it does not fire on well-tagged pages, or making the scaffold truly
-*replace* rather than *append* the original semantic content) is a substantial
-change to a 250-line function with real regression risk on the genuinely-garbled
-pages the function exists to serve, and was intentionally deferred.
+The fix (``_visible_text_scaffold_skip_pages`` in ``pdf_fixer.py``) narrows the
+candidate heuristic so the scaffold does not fire on pages whose existing tags
+are already mostly printable AND already cover the bulk of the visible text.
+Genuinely garbled (low printable ratio) or genuinely sparse pages are still
+scaffolded, preserving the function's intended behavior.
 
-It is gated on a fixture PDF supplied via ``REMEDY_SPARSE_DUP_FIXTURE`` (an
-already-tagged multi-page form input, e.g. the ``e49049…`` gate input) so no
-binary is committed. When the fixture is present the test demonstrates the bug
-(xfail); when the fix lands it will xpass and the marker should be removed.
+The test is gated on a fixture PDF supplied via ``REMEDY_SPARSE_DUP_FIXTURE``
+(an already-tagged, cleanly-encoded multi-page form input, e.g. the ``e49049…``
+gate input) so no binary is committed; it is skipped when the fixture is unset.
 
 Run locally with::
 
@@ -48,8 +47,7 @@ def _page_visits(nodes) -> list[int]:
     return [page for page, _group in groupby(node.page for node in nodes)]
 
 
-@pytest.mark.skipif(not _FIXTURE, reason="set REMEDY_SPARSE_DUP_FIXTURE to an already-tagged form PDF")
-@pytest.mark.xfail(reason="known duplication bug in fix_sparse_visible_text_structure; fix deferred", strict=False)
+@pytest.mark.skipif(not _FIXTURE, reason="set REMEDY_SPARSE_DUP_FIXTURE to a clean already-tagged form PDF")
 def test_sparse_scaffold_does_not_duplicate_pages(tmp_path: Path) -> None:
     src = Path(_FIXTURE)
     work = tmp_path / "work.pdf"
