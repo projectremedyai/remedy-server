@@ -27,6 +27,39 @@ def _table_descendants(report: TagTreeReport, table_index: int) -> list:
     return descendants
 
 
+def _cell_text(descendants: list, start: int) -> str:
+    """Aggregate a cell's own text plus the text of its descendant nodes.
+
+    Cell content is frequently wrapped in child ``Span``/``P`` elements — this
+    is valid PDF/UA structure and is exactly what a screen reader speaks when it
+    lands on the cell. The tag-tree reader only attaches marked-content text to
+    the node that directly owns the MCID, so a ``TH``/``TD`` whose text lives in
+    a child ``Span`` reads as empty on the cell itself. Collect text from the
+    whole cell subtree so wrapped cells are not mistaken for blank cells.
+    """
+    cell = descendants[start]
+    parts: list[str] = []
+    own = " ".join((cell.text or cell.alt_text or "").split())
+    if own:
+        parts.append(own)
+    for node in descendants[start + 1 :]:
+        if node.depth <= cell.depth:
+            break
+        text = " ".join((node.text or node.alt_text or "").split())
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
+def _iter_table_cells(descendants: list) -> list[tuple[str, str]]:
+    """Return ``(tag, aggregated_text)`` for each ``TH``/``TD`` in the subtree."""
+    cells: list[tuple[str, str]] = []
+    for index, node in enumerate(descendants):
+        if node.tag in ("TH", "TD"):
+            cells.append((node.tag, _cell_text(descendants, index)))
+    return cells
+
+
 def score_table_cell_lookup_report(
     report: TagTreeReport,
     *,
@@ -56,16 +89,9 @@ def score_table_cell_lookup_report(
     for table_number, table_index in enumerate(table_indices, start=1):
         descendants = _table_descendants(report, table_index)
         has_rows = any(node.tag == "TR" for node in descendants)
-        header_texts = [
-            " ".join((node.text or node.alt_text or "").split())
-            for node in descendants
-            if node.tag == "TH"
-        ]
-        data_cell_texts = [
-            " ".join((node.text or node.alt_text or "").split())
-            for node in descendants
-            if node.tag == "TD"
-        ]
+        cells = _iter_table_cells(descendants)
+        header_texts = [text for tag, text in cells if tag == "TH"]
+        data_cell_texts = [text for tag, text in cells if tag == "TD"]
         has_headers = bool(header_texts)
         has_non_empty_headers = any(header_texts)
         has_data_cells = bool(data_cell_texts)
@@ -159,14 +185,14 @@ class PDFTableCellLookupTest:
 def _table_rows(descendants: list) -> list[list[tuple[str, str]]]:
     rows: list[list[tuple[str, str]]] = []
     current: list[tuple[str, str]] | None = None
-    for node in descendants:
+    for index, node in enumerate(descendants):
         if node.tag == "TR":
             current = []
             rows.append(current)
             continue
         if node.tag not in {"TH", "TD"}:
             continue
-        text = " ".join((node.text or node.alt_text or "").split())
+        text = _cell_text(descendants, index)
         if current is None:
             current = []
             rows.append(current)
