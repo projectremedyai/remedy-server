@@ -652,6 +652,42 @@ def _rebuild_pdf_with_tesseract_ocr(
     return rebuilt_path
 
 
+def _ocr_preserves_real_words(original_text: str, rebuilt_text: str) -> bool:
+    """True if the OCR rebuild keeps at least as many real alphanumeric tokens as
+    the original extraction.
+
+    OCR is a fidelity regression when a page already has extractable content (e.g.
+    a math worksheet whose *symbols* are PUA-encoded but whose words and answer
+    *numbers* extract fine): Tesseract mangles that content while "fixing" the
+    symbols. Counting ASCII alphanumeric tokens ([A-Za-z0-9]+) captures both words
+    and numbers while naturally excluding PUA/replacement noise, so a genuinely
+    broken page (noise only, near-zero real tokens) still passes the gate and gets
+    its OCR rebuild.
+    """
+    def _real_words(text: str) -> int:
+        return len(re.findall(r"[A-Za-z0-9]+", text))
+
+    return _real_words(rebuilt_text) >= _real_words(original_text)
+
+
+def _ocr_rebuild_preserves_real_text(original_path: Path, rebuilt_path: Path) -> bool:
+    """Whole-document real-word retention gate for the OCR preflight."""
+    try:
+        import fitz
+    except Exception:
+        return True  # cannot verify -> do not block
+    def _doc_text(path: Path) -> str:
+        try:
+            doc = fitz.open(str(path))
+        except Exception:
+            return ""
+        try:
+            return "\n".join(pg.get_text("text") for pg in doc)
+        finally:
+            doc.close()
+    return _ocr_preserves_real_words(_doc_text(original_path), _doc_text(rebuilt_path))
+
+
 def _maybe_rebuild_broken_text_layer(
     pdf_path: Path,
     *,
@@ -701,6 +737,18 @@ def _maybe_rebuild_broken_text_layer(
     except Exception as exc:
         tempdir.cleanup()
         return pdf_path, [], [f"Character encoding preflight: {exc}"], None
+
+    # Fidelity gate: OCR is a last-resort regression. If the rebuild loses real
+    # (alphabetic) words versus the original — the math-worksheet case, where the
+    # words extract fine and only the symbols are PUA-encoded — discard it and
+    # keep the original, flagging the residual encoding issue instead.
+    if not _ocr_rebuild_preserves_real_text(pdf_path, rebuilt_path):
+        tempdir.cleanup()
+        pages = _format_page_list(sorted(problem_pages))
+        return pdf_path, [], [
+            "Character encoding preflight: skipped OCR rebuild — it would lose "
+            f"extractable text on page(s) {pages}; kept original text layer"
+        ], None
 
     if analysis.requires_rebuild:
         pages = _format_page_list(analysis.page_numbers)
@@ -2229,9 +2277,17 @@ def _unwrap_nested_artifact_blocks(text: str) -> tuple[str, int]:
     return "".join(cleaned_parts), unwrapped
 
 
+# Marked-content properties can be an inline dict (``<<...>>``) OR a named
+# resource reference into the page /Properties (e.g. ``/PlacedPDF /MC0 BDC``).
+# The shared _PDF_MARKED_PROPS only covers the inline-dict form; this variant
+# also accepts the named form so ``/Tag /Name BDC`` tokenizes as ONE opener
+# (tag=Tag, props=/Name) instead of the named property being mistaken for the
+# tag and the real tag left stranded. Scoped to this tokenizer only.
+_PDF_MARKED_PROPS_OR_NAME = rf"(?:{_PDF_MARKED_PROPS}|/{_PDF_NAME_TOKEN})"
+
 _MARKED_CONTENT_TOKEN_RE = re.compile(
     rf"/(?P<tag>{_PDF_NAME_TOKEN})\s*"
-    rf"(?P<props>{_PDF_MARKED_PROPS})?\s*(?P<op>BDC|BMC)"
+    rf"(?P<props>{_PDF_MARKED_PROPS_OR_NAME})?\s*(?P<op>BDC|BMC)"
     r"|(?P<emc>\bEMC\b)",
     re.S,
 )
@@ -2467,8 +2523,13 @@ def _remove_top_level_whitespace_actualtext_spans(text: str) -> tuple[str, int]:
         header = block.header.replace(" ", "").upper()
         body = "".join(lines[block.start + 1:block.end])
         is_actualtext_placeholder = (
-            "/ACTUALTEXT<FEFF0009>" in header
-            or "/ACTUALTEXT<FEFF0007>" in header
+            ("/ACTUALTEXT<FEFF0009>" in header
+             or "/ACTUALTEXT<FEFF0007>" in header)
+            # Only a genuine placeholder: a tab/whitespace-ActualText span that ALSO
+            # draws real text (common in tabular PDFs) must NOT be deleted — that
+            # silently loses the visible words. Require an empty body, as the
+            # is_empty_mcid_span branch below already does.
+            and not _VISIBLE_CONTENT_OPERATOR_RE.search(body)
         )
         is_empty_mcid_span = (
             "/MCID" in header
@@ -12770,6 +12831,14 @@ def _embed_base14_fonts(pdf: pikepdf.Pdf) -> int:
         path = _base14_substitute_font_path(base_font)
         if path is None:
             continue
+        # SAFETY (fidelity > compliance): a font with a custom /Differences encoding
+        # maps character codes to glyphs a WinAnsi substitute does NOT reproduce, so
+        # replacing it wholesale silently drops the text those codes render (get_text
+        # loses the words entirely). Leave such a font unembedded — 7.21.4.1 stays for
+        # the alignment-gated embed pass to handle without destroying content.
+        encoding = _resolve_pdf_object(font.get("/Encoding"))
+        if isinstance(encoding, pikepdf.Dictionary) and "/Differences" in encoding:
+            continue
         objgen = getattr(font, "objgen", (0, 0))
         if objgen in seen:
             continue
@@ -16623,6 +16692,21 @@ def fix_all(
             except Exception as exc:  # never let the render-repair abort remediation
                 report.skipped.append(f"BT/ET content-stream repair: error — {exc}")
 
+            # Terminal sweep: some passes (notably fix_page_retag) leave content
+            # marked with an MCID that never got a structure element — veraPDF
+            # 7.1-3. Artifact the provably-whitespace orphans; real-content
+            # orphans are left untouched (never hidden). Scoped like the empty-leaf
+            # cleanup so the large-doc path is unaffected.
+            if only is None and _should_run_empty_leaf_cleanup(pdf):
+                try:
+                    swept = _artifact_orphan_whitespace_mcids(pdf)
+                    if swept:
+                        report.changes.append(
+                            f"Artifacted {swept} orphaned whitespace marked-content span(s)"
+                        )
+                except Exception as exc:  # never let the sweep abort remediation
+                    report.skipped.append(f"Orphan whitespace sweep: error — {exc}")
+
             if not dry_run:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 _save_remediated_pdf(pdf, output_path)
@@ -17766,12 +17850,61 @@ def _fix_screen_reader_figure_flow_impl(pdf: pikepdf.Pdf) -> list[str]:
     return changes
 
 
+def _marked_content_is_whitespace_only(page, mcids: list[int]) -> bool:
+    """True only if every string drawn inside the given MCID-marked blocks is
+    whitespace (or the blocks draw nothing).
+
+    Guards the destructive empty-leaf removal: fitz text extraction can return
+    empty for a leaf that actually DRAWS real glyphs (e.g. a font with no
+    ToUnicode), and removing such a leaf — then demoting its marking to /Artifact
+    — would hide real text from assistive tech while still passing veraPDF. When
+    the marked content uses hex strings (undecodable CID glyphs) or draws an
+    XObject, we conservatively treat it as real content and keep the leaf.
+    """
+    if not mcids:
+        return True
+    raw = _read_page_content(page)
+    if not raw:
+        return True
+    text = raw.decode("latin-1", errors="replace")
+    ws = set(" \t\r\n\x00\x0c")
+    for mcid in set(mcids):
+        pattern = (
+            rf"/{_PDF_NAME_TOKEN}\s*"
+            rf"<<(?:<[^>]*>|(?!>>).)*?/MCID\s+{mcid}\b"
+            rf"(?:<[^>]*>|(?!>>).)*?>>\s*BDC\b(?P<body>.*?)EMC"
+        )
+        for m in re.finditer(pattern, text, flags=re.S):
+            body = m.group("body")
+            # hex string operand (CID glyphs we cannot decode) or image draw ->
+            # cannot prove it is whitespace, so keep the leaf.
+            if re.search(r"<[0-9A-Fa-f][0-9A-Fa-f\s]*>", body) or re.search(r"\bDo\b", body):
+                return False
+            for s in re.findall(r"\((?:[^()\\]|\\.)*\)", body):
+                inner = (
+                    s[1:-1]
+                    .replace("\\(", "(")
+                    .replace("\\)", ")")
+                    .replace("\\\\", "\\")
+                )
+                if any(ch not in ws for ch in inner):
+                    return False
+    return True
+
+
 def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
-    """Remove empty leaf P/Span tags that only point to whitespace content."""
+    """Remove empty leaf P/Span tags that only point to whitespace content.
+
+    A removed leaf's content-stream MCID marking is demoted to /Artifact so it is
+    never left orphaned (marked content with no structure element → veraPDF
+    7.1-3). Leaves whose marked content is not provably whitespace are kept.
+    """
     if not _should_run_empty_leaf_cleanup(pdf):
         return 0
 
-    removable: list[tuple[pikepdf.Dictionary, pikepdf.Dictionary]] = []
+    removable: list[
+        tuple[pikepdf.Dictionary, pikepdf.Dictionary, int, list[int]]
+    ] = []
     page_text_cache: dict[int, dict[int, str]] = {}
     actual_text_cleared = 0
 
@@ -17804,7 +17937,7 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
 
         if not mcids:
             if not node_has_direct_content(node):
-                removable.append((node, parent))
+                removable.append((node, parent, page_idx, []))
             continue
 
         page_text = page_text_cache.get(page_idx)
@@ -17822,20 +17955,30 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
         if text:
             continue
 
-        removable.append((node, parent))
+        # Extraction reports empty, but only remove if the marked content is
+        # provably whitespace at the content-stream level — otherwise a
+        # real-glyph leaf whose text merely failed to extract (e.g. no
+        # ToUnicode) would be deleted and its content hidden from AT.
+        if not _marked_content_is_whitespace_only(pdf.pages[page_idx], mcids):
+            continue
+
+        removable.append((node, parent, page_idx, mcids))
 
     removed = 0
     removals_by_parent: dict[
         tuple[str, object],
         tuple[pikepdf.Dictionary, set[tuple[str, object]], list[pikepdf.Dictionary]],
     ] = {}
-    for node, parent in removable:
+    artifact_targets: dict[int, set[int]] = {}
+    for node, parent, page_idx, mcids in removable:
         parent_key = _pdf_object_identity(parent)
         if parent_key not in removals_by_parent:
             removals_by_parent[parent_key] = (parent, set(), [])
         _parent, node_keys, nodes = removals_by_parent[parent_key]
         node_keys.add(_pdf_object_identity(node))
         nodes.append(node)
+        if mcids and 0 <= page_idx < len(pdf.pages):
+            artifact_targets.setdefault(page_idx, set()).update(mcids)
 
     for parent, node_keys, nodes in removals_by_parent.values():
         removed_here = _remove_nodes_from_parent(parent, node_keys)
@@ -17844,12 +17987,86 @@ def _fix_empty_leaf_text_elements(pdf: pikepdf.Pdf) -> int:
         for node in nodes:
             _clear_parent_tree_mcids(pdf, node)
 
+    # Demote each removed leaf's marked content to /Artifact so no MCID marking is
+    # left orphaned in the content stream (marked content with no structure
+    # element → veraPDF 7.1-3). Mirrors fix_artifact_structure_elements.
+    for page_idx, mcids in artifact_targets.items():
+        _artifactize_page_mcids(pdf, pdf.pages[page_idx], sorted(mcids))
+
     # Cascade-prune: remove container nodes left empty after leaf removal.
     removed += _prune_dead_and_empty_nodes(pdf)
 
     removed += actual_text_cleared
 
     return removed
+
+
+def _artifact_orphan_whitespace_mcids(pdf: pikepdf.Pdf) -> int:
+    """Terminal sweep: demote whitespace MCID markings left orphaned by any pass.
+
+    Some passes (notably fix_page_retag) mark content with an MCID that never
+    gets a corresponding structure element; veraPDF flags each as 7.1-3
+    ("Content is neither marked as Artifact nor tagged as real content"). This
+    artifacts the *provably-whitespace* orphans; real-content orphans are left
+    untouched so no visible text is ever hidden (they need re-tagging, not
+    artifacting). Reuses the same whitespace guard as _fix_empty_leaf_text_elements.
+    """
+    struct_root = pdf.Root.get("/StructTreeRoot")
+    if struct_root is None:
+        return 0
+
+    # 1) MCIDs referenced by the structure tree, bucketed by page object.
+    referenced: dict[tuple[int, int], set[int]] = {}
+    visited: set[tuple[int, int]] = set()
+
+    def _record(pg, mcid):
+        if isinstance(pg, pikepdf.Dictionary):
+            referenced.setdefault(pg.objgen, set()).add(int(mcid))
+
+    def _walk(node, inherited_pg):
+        oid = getattr(node, "objgen", None)
+        if oid is not None:
+            if oid in visited:
+                return
+            visited.add(oid)
+        if not isinstance(node, pikepdf.Dictionary):
+            return
+        pg = node.get("/Pg") if "/Pg" in node else inherited_pg
+        kids = node.get("/K")
+        if kids is None:
+            return
+        items = kids if isinstance(kids, pikepdf.Array) else [kids]
+        for item in items:
+            if isinstance(item, int):
+                _record(pg, item)
+            elif isinstance(item, pikepdf.Dictionary):
+                if item.get("/Type") == pikepdf.Name("/MCR") and item.get("/MCID") is not None:
+                    _record(item.get("/Pg", pg), int(item["/MCID"]))
+                _walk(item, pg)
+
+    try:
+        _walk(struct_root.get("/K"), None)
+    except Exception:
+        return 0
+
+    # 2) Per page, artifact whitespace-only MCID markings not referenced above.
+    total = 0
+    for page in pdf.pages:
+        raw = _read_page_content(page)
+        if not raw:
+            continue
+        content_mcids = {int(m) for m in re.findall(rb"/MCID\s+(\d+)", raw)}
+        if not content_mcids:
+            continue
+        ref = referenced.get(page.obj.objgen, set())
+        orphans = content_mcids - ref
+        ws_orphans = [
+            mc for mc in sorted(orphans)
+            if _marked_content_is_whitespace_only(page, [mc])
+        ]
+        if ws_orphans:
+            total += _artifactize_page_mcids(pdf, page, ws_orphans)
+    return total
 
 
 _CASCADE_CONTAINER_TYPES = {"Sect", "Div", "NonStruct", "Part", "Art", "BlockQuote"}
@@ -18061,8 +18278,12 @@ def _prune_dead_and_empty_nodes(pdf: pikepdf.Pdf) -> int:
             for node in nodes:
                 _clear_parent_tree_mcids(pdf, node)
 
-    # Rerun table repair if we pruned table nodes
+    # Rerun table repair if we pruned table nodes. Pruning dead/empty cells can
+    # leave rows with unequal column counts (veraPDF 7.2-42/43), so regularity
+    # must be re-enforced here — not just header repair — or the pruned tables
+    # ship irregular.
     if pruned_table_nodes:
+        fix_table_regularity(pdf)
         fix_table_headers(pdf)
         fix_table_header_scope(pdf)
 

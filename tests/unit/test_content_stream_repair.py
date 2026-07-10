@@ -91,6 +91,60 @@ def test_dropped_intermediate_bt_is_reopened():
     assert ops_of(out).count("BT") == 2 and ops_of(out).count("ET") == 2
 
 
+def test_reopened_text_object_restores_text_matrix():
+    """Regression for the invisible-body-text loss: when repair re-opens a dropped
+    text object, the fresh BT resets the text matrix to identity. A run positioned
+    by a RELATIVE Td (Acrobat/Word norm: one Tm, then relative moves) then collapses
+    to the origin at ~1pt and vanishes. Repair must emit an explicit Tm restoring the
+    accumulated text-line matrix at the re-opened BT."""
+    instrs = [
+        op("BT"),
+        op("Tm", 1, 0, 0, 1, 100, 700),
+        op("Tj", String("line1")),
+        # illegal-in-text graphics force an ET; the next run lost its BT
+        op("q"), op("re", 0, 0, 9, 9), op("f"), op("Q"),
+        op("Td", 0, -14),            # RELATIVE move — this run has no Tm of its own
+        op("Tj", String("line2")),
+        op("ET"),
+    ]
+    out, changes = _renormalize(instrs)
+    assert balanced(out) and text_ops_all_inside(out)
+    seq = ops_of(out)
+    bt_positions = [i for i, s in enumerate(seq) if s == "BT"]
+    assert len(bt_positions) == 2
+    second_bt = bt_positions[1]
+    # the re-opened BT must be immediately followed by a Tm restoring the matrix
+    assert seq[second_bt + 1] == "Tm", f"re-opened BT not followed by Tm: {seq}"
+    # and that Tm must be the accumulated line matrix (100,700) so the following
+    # Td 0 -14 lands line2 at (100,686), not (0,-14)
+    assert [float(x) for x in out[second_bt + 1].operands] == [1, 0, 0, 1, 100, 700]
+
+
+def test_mid_line_continuation_restores_advanced_text_matrix():
+    """A run split mid-line (continuation is a show op with NO leading Td) must be
+    restored to the ADVANCED text matrix (line origin + the glyph advances already
+    shown), not the line origin. Requires a font-width map so advances are known."""
+    widths = {"/F1": ((lambda code: 500.0), False)}   # every glyph is 500/1000 wide
+    instrs = [
+        op("BT"),
+        op("Tm", 1, 0, 0, 1, 100, 700),
+        op("Tf", Name("/F1"), 10),
+        op("Tj", String("AB")),                 # advances 2 * (0.5 * 10) = 10 units
+        op("q"), op("re", 0, 0, 9, 9), op("f"), op("Q"),   # forces ET; next run lost BT
+        op("Tj", String("CD")),                 # mid-line continuation, no Td
+        op("ET"),
+    ]
+    out, changes = _renormalize(instrs, widths)
+    assert balanced(out) and text_ops_all_inside(out)
+    seq = ops_of(out)
+    bt_positions = [i for i, s in enumerate(seq) if s == "BT"]
+    assert len(bt_positions) == 2
+    second_bt = bt_positions[1]
+    assert seq[second_bt + 1] == "Tm", f"continuation BT not followed by Tm: {seq}"
+    # restored to the advanced position: e = 100 + 10 = 110 (NOT the 100 line origin)
+    assert [float(x) for x in out[second_bt + 1].operands] == [1, 0, 0, 1, 110, 700]
+
+
 def test_orphaned_et_is_dropped():
     instrs = [op("ET"), op("q"), op("Q")]  # ET with no BT
     out, changes = _renormalize(instrs)
