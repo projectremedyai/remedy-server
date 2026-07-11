@@ -209,19 +209,27 @@ def deterministic_heading_levels(pdf_path: Path, page_idx: int) -> dict[str, int
     return levels
 
 
+_HEADING_TAGS = ("H1", "H2", "H3", "H4", "H5", "H6")
+
+
 def apply_prominence_heading_rescue(
     pdf_path: Path,
     pages: list[int],
     *,
     save: bool = True,
 ) -> list[str]:
-    """Vision-free retag: promote text nodes whose visible text matches a
-    deterministically-detected heading line to the measured H-level.
+    """Vision-free retag: correct the *level* of EXISTING headings from font
+    prominence. Re-level-only by design — it never promotes a non-heading.
 
-    Every retag passes through :func:`pdf_fixer._find_heading_retag_node_by_text`
-    with ``require_safe_target`` set, so the same guard that protects table
-    cells, list structure and image-only figures applies here — a prominent
-    TABLE CELL is never promoted. Saves in place only when something changed.
+    Blanket promotion (any prominent line -> heading) damaged real documents:
+    on a dense handout it turned 28 bold labels / emphasis runs / form text
+    into headings and even manufactured an H6-after-H3 skip. Deciding *whether*
+    a paragraph is a heading is the vision model's job (voted); this pass only
+    fixes the *level* of nodes already tagged H1-H6 — the judgment the noisy
+    adapter is least reliable at — by matching a heading node's visible text to
+    a deterministically-measured line size. Table cells, list items, and image
+    figures are never headings, so they are never matched. Saves in place only
+    when a level actually changed.
     """
     import pikepdf
 
@@ -240,10 +248,17 @@ def apply_prominence_heading_rescue(
                 continue
             for text, level in levels.items():
                 target = f"H{min(max(int(level), 1), 6)}"
-                node = PF._find_heading_retag_node_by_text(
-                    pdf, page_idx, "", [text], require_safe_target=target,
-                )
-                if node is None:
+                # Only match nodes already tagged as a heading (claimed_tag in
+                # H1..H6) — a non-heading paragraph is never a candidate, so it
+                # can never be promoted.
+                node = None
+                for current in _HEADING_TAGS:
+                    node = PF._find_heading_retag_node_by_text(
+                        pdf, page_idx, current, [text],
+                    )
+                    if node is not None:
+                        break
+                if node is None or PF._get_struct_type(node) == target:
                     continue
                 node["/S"] = pikepdf.Name(f"/{target}")
                 retagged += 1
@@ -252,7 +267,7 @@ def apply_prominence_heading_rescue(
 
     if retagged:
         return [
-            f"Retagged {retagged} element(s) from deterministic visual prominence"
+            f"Re-leveled {retagged} existing heading(s) from deterministic visual prominence"
         ]
     return []
 

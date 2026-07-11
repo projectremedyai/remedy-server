@@ -192,14 +192,17 @@ def test_deterministic_heading_levels_ranks_by_font_size(tmp_path):
     assert not any("body sentence" in k for k in levels), "modal body text is not a heading"
 
 
-def test_prominence_rescue_retags_matching_node_via_guard(tmp_path, monkeypatch):
+def test_prominence_rescue_does_not_promote_non_heading(tmp_path, monkeypatch):
+    """Re-level-ONLY: a visually prominent paragraph (bold label, emphasis,
+    form text) must NEVER be promoted to a heading. Blanket promotion damaged
+    real documents (28 spurious headings on a 2-page handout), so prominence
+    only adjusts the LEVEL of nodes that are already headings."""
     pdf, elems = _doc_two_p(_CONTENT)
     path = tmp_path / "doc.pdf"
     pdf.save(path)
 
     monkeypatch.setattr(PF, "_extract_mcid_text",
                         lambda page: {0: "Annual Program Review", 1: "Fleeting Sidebar Label"})
-    # Deterministic measurement is tested separately; here inject a level map.
     monkeypatch.setattr(HF, "deterministic_heading_levels",
                         lambda p, idx: {_norm("Annual Program Review"): 1})
 
@@ -207,41 +210,75 @@ def test_prominence_rescue_retags_matching_node_via_guard(tmp_path, monkeypatch)
 
     with pikepdf.open(path) as out:
         types = [PF._get_struct_type(n) for n, _d, _p in PF.walk_structure_tree(out)]
-    assert "H1" in types, "prominence-detected heading retagged without any vision call"
-    assert types.count("H1") == 1 and "P" in types, "only the detected line promoted"
-    assert changes, "rescue reports the retag"
+    assert "H1" not in types, "a prominent non-heading paragraph must NOT be promoted"
+    assert changes == [], "nothing to re-level -> no change"
 
 
-def _doc_p_and_td(pdf_content):
+def _doc_one_heading(content, tag="/H1"):
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+    pg = pdf.pages[0].obj
+    pg.Contents = pdf.make_stream(content)
+    h = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name(tag), Pg=pg, K=0))
+    doc = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name("/Document"),
+                                       K=Array([h])))
+    h.P = doc
+    pdf.Root.StructTreeRoot = pdf.make_indirect(
+        Dictionary(Type=Name("/StructTreeRoot"), K=Array([doc])))
+    pdf.Root.MarkInfo = Dictionary(Marked=True)
+    return pdf, h
+
+
+def test_prominence_rescue_relevels_existing_heading(tmp_path, monkeypatch):
+    """An existing heading whose visual size says a different level gets its
+    LEVEL corrected (the judgment the noisy adapter is worst at)."""
+    content = b"/H1 <</MCID 0>> BDC\nBT /F1 16 Tf 72 700 Td (Enrollment Summary) Tj ET\nEMC\n"
+    pdf, _h = _doc_one_heading(content)
+    path = tmp_path / "h.pdf"
+    pdf.save(path)
+
+    monkeypatch.setattr(PF, "_extract_mcid_text", lambda page: {0: "Enrollment Summary"})
+    monkeypatch.setattr(HF, "deterministic_heading_levels",
+                        lambda p, idx: {_norm("Enrollment Summary"): 2})
+
+    changes = HF.apply_prominence_heading_rescue(path, [0])
+
+    with pikepdf.open(path) as out:
+        types = [PF._get_struct_type(n) for n, _d, _p in PF.walk_structure_tree(out)]
+    assert "H2" in types and "H1" not in types, "existing H1 re-leveled to measured H2"
+    assert changes, "re-level reported as a change"
+
+
+def _doc_heading_and_td(pdf_content):
     pdf = pikepdf.Pdf.new()
     pdf.add_blank_page(page_size=(612, 792))
     pg = pdf.pages[0].obj
     pg.Contents = pdf.make_stream(pdf_content)
-    p = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name("/P"), Pg=pg, K=0))
+    h = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name("/H1"), Pg=pg, K=0))
     td = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name("/TD"), Pg=pg, K=1))
     doc = pdf.make_indirect(Dictionary(Type=Name("/StructElem"), S=Name("/Document"),
-                                       K=Array([p, td])))
-    p.P = doc
+                                       K=Array([h, td])))
+    h.P = doc
     td.P = doc
     pdf.Root.StructTreeRoot = pdf.make_indirect(
         Dictionary(Type=Name("/StructTreeRoot"), K=Array([doc])))
     pdf.Root.MarkInfo = Dictionary(Marked=True)
-    return pdf, p, td
+    return pdf, h, td
 
 
-def test_prominence_rescue_never_promotes_a_table_cell(tmp_path, monkeypatch):
-    """A large-font TABLE CELL is visually prominent but must never become a
-    heading — the safe-retag guard forbids TD -> H*."""
-    content = (b"/P <</MCID 0>> BDC\nBT /F1 20 Tf 72 730 Td (Federal Data) Tj ET\nEMC\n"
+def test_prominence_rescue_never_touches_a_table_cell(tmp_path, monkeypatch):
+    """A large-font TABLE CELL is visually prominent but is not a heading, so
+    re-level-only never touches it — even when its text is a detected level."""
+    content = (b"/H1 <</MCID 0>> BDC\nBT /F1 24 Tf 72 730 Td (Federal Data) Tj ET\nEMC\n"
                b"/TD <</MCID 1>> BDC\nBT /F1 20 Tf 72 700 Td (Big Cell Value) Tj ET\nEMC\n")
-    pdf, p, td = _doc_p_and_td(content)
+    pdf, _h, _td = _doc_heading_and_td(content)
     path = tmp_path / "table.pdf"
     pdf.save(path)
 
     monkeypatch.setattr(PF, "_extract_mcid_text",
                         lambda page: {0: "Federal Data", 1: "Big Cell Value"})
     monkeypatch.setattr(HF, "deterministic_heading_levels",
-                        lambda p, idx: {_norm("Federal Data"): 1, _norm("Big Cell Value"): 1})
+                        lambda p, idx: {_norm("Federal Data"): 1, _norm("Big Cell Value"): 2})
 
     HF.apply_prominence_heading_rescue(path, [0])
 
@@ -253,8 +290,8 @@ def test_prominence_rescue_never_promotes_a_table_cell(tmp_path, monkeypatch):
             except (TypeError, ValueError):
                 continue
             by_mcid[mcid] = PF._get_struct_type(n)
-    assert by_mcid[0] == "H1", "the paragraph title is promoted"
-    assert by_mcid[1] == "TD", "the table cell must stay a TD"
+    assert by_mcid[0] == "H1", "existing H1 already at measured level 1 stays H1"
+    assert by_mcid[1] == "TD", "the table cell must stay a TD (never promoted)"
 
 
 # --- Part C: generalized failure-driven refix registry ----------------------
