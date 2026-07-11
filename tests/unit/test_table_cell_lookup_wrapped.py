@@ -83,8 +83,18 @@ def test_direct_text_cells_still_pass() -> None:
     assert result.passed is True
 
 
-def test_genuinely_empty_cells_still_fail() -> None:
-    """A blank-form table with empty data cells must not be scored as ready."""
+def test_labeled_headers_with_empty_cells_is_a_blank_grid() -> None:
+    """Labeled headers + present-but-empty data cells is an unfilled form grid.
+
+    Superseded semantics: this used to be asserted as a hard failure
+    ("genuinely empty cells still fail"). But the *input* documents score 0.0
+    the same way — remediation cannot invent data that the source form does not
+    contain, so failing table_structure here punishes remediation for the
+    document being blank rather than for a structural defect. The grid is
+    navigable (a screen reader speaks each header and each empty field), so it
+    is treated as not-applicable for cell lookup. Genuine failures — dropped
+    cells, missing headers — are covered by the tests below.
+    """
     report = _report(
         [
             _node("Table", 1),
@@ -98,10 +108,68 @@ def test_genuinely_empty_cells_still_fail() -> None:
             _node("TD", 3),  # empty cell, no descendant text
         ]
     )
-    result = score_table_cell_lookup_report(report)
+    result = score_table_cell_lookup_report(report, threshold=0.75)
+    assert result.metadata["blank_fillable_grids"] == 1
+    assert result.score == 1.0
+    assert result.passed is True
+    assert any(f["issue"] == "blank_fillable_grid" for f in result.findings)
+
+
+def _blank_rating_grid() -> TagTreeReport:
+    """Labeled headers, data-cell nodes present but text-empty (unfilled form)."""
+    return _report(
+        [
+            _node("Table", 1),
+            _node("TR", 2),
+            _node("TH", 3, "Excellent"),
+            _node("TH", 3, "Good"),
+            _node("TH", 3, "Fair"),
+            _node("TR", 2),
+            _node("TD", 3, ""),
+            _node("TD", 3, ""),
+            _node("TD", 3, ""),
+        ]
+    )
+
+
+def test_blank_fillable_grid_is_not_a_failure() -> None:
+    result = score_table_cell_lookup_report(_blank_rating_grid(), threshold=0.75)
+    assert result.metadata["blank_fillable_grids"] == 1
+    assert result.metadata["scorable_tables"] == 0
+    assert result.score == 1.0
+    assert result.passed
+    assert not any(f["severity"] == "error" for f in result.findings)
+
+
+def test_dropped_data_cells_still_fail() -> None:
+    # Headers present but the data-cell nodes are gone (dropped by remediation)
+    # -> not a blank form, must still fail. This is the guard that keeps the
+    # blank-grid exemption from masking cell loss.
+    report = _report(
+        [
+            _node("Table", 1),
+            _node("TR", 2),
+            _node("TH", 3, "Excellent"),
+            _node("TH", 3, "Good"),
+            _node("TH", 3, "Fair"),
+        ]
+    )
+    result = score_table_cell_lookup_report(report, threshold=0.75)
+    assert result.metadata["blank_fillable_grids"] == 0
     assert result.score == 0.0
-    assert result.passed is False
-    finding = result.findings[0]
-    assert finding["issue"] == "table_not_lookup_ready"
-    assert finding["has_non_empty_headers"] is True
-    assert finding["has_non_empty_data_cells"] is False
+    assert not result.passed
+
+
+def test_blank_grid_does_not_mask_a_real_failing_table() -> None:
+    # One blank grid (N/A) + one genuinely broken data table (data, no headers)
+    # -> score reflects only the scorable table, which fails.
+    nodes = _blank_rating_grid().nodes + [
+        _node("Table", 1),
+        _node("TR", 2),
+        _node("TD", 3, "42"),
+    ]
+    result = score_table_cell_lookup_report(_report(nodes), threshold=0.75)
+    assert result.metadata["blank_fillable_grids"] == 1
+    assert result.metadata["scorable_tables"] == 1
+    assert result.score == 0.0
+    assert not result.passed
