@@ -30,7 +30,12 @@ from project_remedy.levels import (
     summarize_levels,
 )
 from project_remedy.pdf_acceptance import evaluate_pdf_acceptance
-from project_remedy.pdf_fixer import fix_and_verify
+from project_remedy.pdf_fixer import (
+    apply_heading_retag_refix,
+    fix_and_verify,
+    heading_retag_pages_from_failures,
+)
+from project_remedy.pdf_vision import create_provider_from_config
 from project_remedy.tag_tree_reader import Severity
 
 
@@ -425,6 +430,32 @@ def run(args: argparse.Namespace) -> int:
 
             print("    stage=acceptance", flush=True)
             acceptance, clean = _evaluate(source, output, acceptance_config)
+
+            # Failure-driven heading retag: the acceptance checker's vision
+            # pass names the exact pages with mis-tagged headings; route them
+            # into the targeted retag fixer instead of hoping the generic
+            # refix (page-sampled, large-doc-deferred) happens to cover them.
+            if not clean and not args.audit_only and acceptance_config is not None:
+                retag_pages = heading_retag_pages_from_failures(
+                    getattr(acceptance, "checker_failures", None) or []
+                )
+                if retag_pages:
+                    provider = create_provider_from_config(acceptance_config)
+                    if provider is not None:
+                        print(
+                            f"    stage=heading-retag pages={[p + 1 for p in retag_pages]}",
+                            flush=True,
+                        )
+                        retag_changes = apply_heading_retag_refix(
+                            output,
+                            vision_provider=provider,
+                            checker_failures=acceptance.checker_failures,
+                        )
+                        fix_changes.extend(retag_changes)
+                        if retag_changes:
+                            print("    stage=reacceptance(heading-retag)", flush=True)
+                            acceptance, clean = _evaluate(source, output, acceptance_config)
+
             if not clean and not args.audit_only:
                 residue = (
                     acceptance.verapdf_result.violations
