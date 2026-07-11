@@ -9751,6 +9751,52 @@ def _is_safe_vision_heading_retag(
     return False
 
 
+def _find_heading_retag_node_by_text(
+    pdf: pikepdf.Pdf,
+    page_idx: int,
+    claimed_tag: str,
+    candidates: list[str],
+) -> pikepdf.Dictionary | None:
+    """Locate a page's struct node by the vision issue's claimed tag + text.
+
+    Node text is read from ActualText/Alt/T and, crucially, from the node's
+    marked content (MCIDs) — the common case for real documents. Vision text
+    is often a superset of one node's text (it reads a visual line spanning
+    several nodes), so prefix-containment both ways counts as a match.
+    """
+    normalized = [
+        _normalize_extracted_text(c).lower() for c in candidates or []
+    ]
+    normalized = [c for c in normalized if c]
+    if not normalized:
+        return None
+    try:
+        page_texts = _extract_mcid_text(pdf.pages[page_idx])
+    except Exception:
+        page_texts = {}
+    for node in _page_structure_nodes_for_vision_order(pdf, page_idx):
+        stype = _get_struct_type(node)
+        if claimed_tag and stype != claimed_tag:
+            continue
+        text = _structure_node_text(node)
+        if not text:
+            text = " ".join(
+                str(page_texts.get(mcid, "")) for mcid in _get_node_mcids(node)
+            )
+        node_text = _normalize_extracted_text(text).lower().strip()
+        if not node_text:
+            continue
+        for cand in normalized:
+            if (
+                node_text == cand
+                or node_text.startswith(cand)
+                or cand.startswith(node_text)
+                or (len(cand) >= 8 and f" {cand} " in f" {node_text} ")
+            ):
+                return node
+    return None
+
+
 def _figure_retag_has_speakable_text(pdf: pikepdf.Pdf, node: pikepdf.Dictionary) -> bool:
     actual = node.get("/ActualText")
     if actual is not None and str(actual).strip():
@@ -10910,10 +10956,24 @@ def fix_heading_hierarchy_quality(
 
         nodes = _page_structure_nodes_for_vision_order(pdf, page_idx)
         idx = int(element_index) - 1
-        if idx < 0 or idx >= len(nodes):
+        node = nodes[idx] if 0 <= idx < len(nodes) else None
+
+        # The model numbers the elements it SEES; our enumeration includes
+        # every struct node (table TDs etc.), so element_index is routinely
+        # misaligned. Trust it only when the indexed node matches the issue's
+        # claimed tag; otherwise locate the target by claimed tag + text
+        # (MCID-aware). Never retag an unverified node.
+        claimed_tag = str(getattr(issue, "current_tag", "") or "").strip().lstrip("/")
+        if node is not None and claimed_tag and _get_struct_type(node) != claimed_tag:
+            node = None
+        if node is None:
+            node = _find_heading_retag_node_by_text(
+                pdf, page_idx, claimed_tag,
+                _vision_heading_text_candidates(issue),
+            )
+        if node is None:
             continue
 
-        node = nodes[idx]
         current_tag = _get_struct_type(node)
         if not _is_safe_vision_heading_retag(current_tag, target_tag, node=node, pdf=pdf):
             continue

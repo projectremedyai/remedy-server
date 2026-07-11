@@ -189,6 +189,68 @@ def test_apply_heading_retag_refix_fixes_file_in_place(tmp_path, monkeypatch):
     assert "H1" in types, "saved file must contain the retagged heading"
 
 
+CONTENT_TABLE_AND_TITLE = (
+    b"/P <</MCID 0>> BDC\n"
+    b"BT /F1 20 Tf 72 730 Td (Federal Data) Tj ET\n"
+    b"EMC\n"
+    b"/TD <</MCID 1>> BDC\n"
+    b"BT /F1 10 Tf 72 700 Td (cell value) Tj ET\n"
+    b"EMC\n"
+)
+
+
+def test_misaligned_element_index_falls_back_to_text_match(monkeypatch):
+    """The vision model numbers visual elements, not struct nodes — a wrong
+    element_index must not silently drop (or worse, retag) the wrong node.
+    When the indexed node doesn't match the issue's claimed tag/text, the
+    fixer must locate the node by current_tag + text (MCID-aware)."""
+    pdf, elems = _doc(CONTENT_TABLE_AND_TITLE, [("/P", 0), ("/TD", 1)])
+    nodes = PF._page_structure_nodes_for_vision_order(pdf, 0)
+    td_index = next(i for i, n in enumerate(nodes)
+                    if n.objgen == elems[1].objgen) + 1  # 1-based, points at TD
+
+    issue = HeadingIssue(
+        page=1, description="title/section heading is tagged as body text",
+        severity="error", suggestion="Retag as H1",
+        element_index=td_index,          # WRONG: model's numbering, lands on TD
+        current_tag="P", correct_tag="H1",
+        text="Federal Data # Question Answer",  # model text is a superset
+    )
+    captured: dict = {}
+    _patch_vision(monkeypatch, [issue], captured)
+    monkeypatch.setattr(PF, "_extract_mcid_text",
+                        lambda page: {0: "Federal Data", 1: "cell value"})
+
+    PF.fix_heading_hierarchy_quality(pdf, vision_provider=object(), force_pages=[0])
+
+    assert PF._get_struct_type(elems[0]) == "H1", \
+        "must find the P node by text and retag it"
+    assert PF._get_struct_type(elems[1]) == "TD", "the mis-indexed TD must be untouched"
+
+
+def test_misaligned_index_without_text_match_is_skipped(monkeypatch):
+    pdf, elems = _doc(CONTENT_TABLE_AND_TITLE, [("/P", 0), ("/TD", 1)])
+    nodes = PF._page_structure_nodes_for_vision_order(pdf, 0)
+    td_index = next(i for i, n in enumerate(nodes)
+                    if n.objgen == elems[1].objgen) + 1
+
+    issue = HeadingIssue(
+        page=1, description="title/section heading is tagged as body text",
+        severity="error", suggestion="Retag as H1",
+        element_index=td_index, current_tag="P", correct_tag="H1",
+        text="Completely Different Title",   # matches nothing on the page
+    )
+    captured: dict = {}
+    _patch_vision(monkeypatch, [issue], captured)
+    monkeypatch.setattr(PF, "_extract_mcid_text",
+                        lambda page: {0: "Federal Data", 1: "cell value"})
+
+    PF.fix_heading_hierarchy_quality(pdf, vision_provider=object(), force_pages=[0])
+
+    assert PF._get_struct_type(elems[0]) == "P", "no verified target -> no retag"
+    assert PF._get_struct_type(elems[1]) == "TD"
+
+
 def test_apply_heading_retag_refix_no_pages_is_noop(tmp_path):
     pdf, _elems = _doc(CONTENT_TITLE_AND_BODY, [("/P", 0), ("/P", 1)])
     path = tmp_path / "ok.pdf"
