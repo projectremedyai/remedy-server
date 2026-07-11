@@ -255,6 +255,56 @@ def test_misaligned_index_without_text_match_is_skipped(monkeypatch):
     assert PF._get_struct_type(elems[1]) == "TD"
 
 
+CONTENT_SECT_TITLE = (
+    b"/P <</MCID 0>> BDC\n"
+    b"BT /F1 20 Tf 72 730 Td (LAMC CRIME STATS- MAR 2010) Tj ET\n"
+    b"EMC\n"
+)
+
+
+def test_container_indexed_issue_rescued_via_guard_passable_text_leaf(monkeypatch):
+    """The model often indexes the CONTAINER (Sect) that holds a title, with
+    an empty current_tag. Retagging a Sect would swallow its content — the
+    guard refuses — but the fix must then rescue by finding the guard-passable
+    text leaf (the P actually carrying the title) instead of giving up."""
+    pdf = pikepdf.Pdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+    pg = pdf.pages[0].obj
+    pg.Contents = pdf.make_stream(CONTENT_SECT_TITLE)
+    p_node = pdf.make_indirect(Dictionary(
+        Type=Name("/StructElem"), S=Name("/P"), Pg=pg, K=0))
+    sect = pdf.make_indirect(Dictionary(
+        Type=Name("/StructElem"), S=Name("/Sect"), Pg=pg, K=Array([p_node])))
+    p_node.P = sect
+    doc = pdf.make_indirect(Dictionary(
+        Type=Name("/StructElem"), S=Name("/Document"), K=Array([sect])))
+    sect.P = doc
+    pdf.Root.StructTreeRoot = pdf.make_indirect(
+        Dictionary(Type=Name("/StructTreeRoot"), K=Array([doc])))
+    pdf.Root.MarkInfo = Dictionary(Marked=True)
+
+    nodes = PF._page_structure_nodes_for_vision_order(pdf, 0)
+    sect_index = next(i for i, n in enumerate(nodes)
+                      if n.objgen == sect.objgen) + 1
+
+    issue = HeadingIssue(
+        page=1, description="page title not tagged as heading",
+        severity="error", suggestion="Retag as H1",
+        element_index=sect_index, current_tag="", correct_tag="H1",
+        text="LAMC CRIME STATS- MAR 2010 WEEK ENDING: ",
+    )
+    captured: dict = {}
+    _patch_vision(monkeypatch, [issue], captured)
+    monkeypatch.setattr(PF, "_extract_mcid_text",
+                        lambda page: {0: "LAMC CRIME STATS- MAR 2010"})
+
+    PF.fix_heading_hierarchy_quality(pdf, vision_provider=object(), force_pages=[0])
+
+    assert PF._get_struct_type(p_node) == "H1", \
+        "the P text leaf must be promoted instead of the refused Sect"
+    assert PF._get_struct_type(sect) == "Sect", "the Sect container must be untouched"
+
+
 def test_apply_heading_retag_refix_no_pages_is_noop(tmp_path):
     pdf, _elems = _doc(CONTENT_TITLE_AND_BODY, [("/P", 0), ("/P", 1)])
     path = tmp_path / "ok.pdf"

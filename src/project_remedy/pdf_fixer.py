@@ -9756,6 +9756,7 @@ def _find_heading_retag_node_by_text(
     page_idx: int,
     claimed_tag: str,
     candidates: list[str],
+    require_safe_target: str | None = None,
 ) -> pikepdf.Dictionary | None:
     """Locate a page's struct node by the vision issue's claimed tag + text.
 
@@ -9777,6 +9778,10 @@ def _find_heading_retag_node_by_text(
     for node in _page_structure_nodes_for_vision_order(pdf, page_idx):
         stype = _get_struct_type(node)
         if claimed_tag and stype != claimed_tag:
+            continue
+        if require_safe_target is not None and not _is_safe_vision_heading_retag(
+            stype, require_safe_target, node=node, pdf=pdf
+        ):
             continue
         text = _structure_node_text(node)
         if not text:
@@ -10975,6 +10980,18 @@ def fix_heading_hierarchy_quality(
             node = _find_heading_retag_node_by_text(
                 pdf, page_idx, claimed_tag,
                 _vision_heading_text_candidates(issue),
+            )
+        if node is not None and not _is_safe_vision_heading_retag(
+            _get_struct_type(node), target_tag, node=node, pdf=pdf
+        ):
+            # The model often indexes the CONTAINER holding a title (Sect,
+            # TOC, Table) — retagging that would swallow its content. Rescue
+            # by locating a guard-passable text leaf matching the issue text
+            # (e.g. the P inside the Sect actually carrying the title).
+            node = _find_heading_retag_node_by_text(
+                pdf, page_idx, "",
+                _vision_heading_text_candidates(issue),
+                require_safe_target=target_tag,
             )
         if node is None:
             continue
