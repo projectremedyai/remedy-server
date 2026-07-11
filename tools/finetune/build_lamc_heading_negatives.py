@@ -223,7 +223,8 @@ def _page_record(
     from project_remedy.pdf_vision import _get_page_structure_order
     from project_remedy.vision_prompts import heading_hierarchy_quality_prompt
 
-    order = _get_page_structure_order(pdf_path, page)
+    # include_mcid_text matches the (enriched) production heading prompt.
+    order = _get_page_structure_order(pdf_path, page, include_mcid_text=True)
     png_name = f"lamc_{doc_id}_p{page}_{dpi}dpi.png"
     try:
         _render_page(pdf_path, page, renders_dir / png_name, dpi)
@@ -280,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                 from project_remedy.pdf_vision import _get_page_structure_order
 
                 order_lines = parse_structure_order_lines(
-                    _get_page_structure_order(output, page))
+                    _get_page_structure_order(output, page, include_mcid_text=True))
                 target = build_fail_target(order_lines, heads[page])
                 variant = "lamc_true_fail" if target["status"] == "fail" \
                     else "lamc_false_flag_pass"

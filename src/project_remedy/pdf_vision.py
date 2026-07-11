@@ -1118,10 +1118,21 @@ def _resolve_pdf_object(obj):
     return obj
 
 
-def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
+def _get_page_structure_order(
+    pdf_path: Path,
+    page_num: int,
+    *,
+    include_mcid_text: bool = False,
+) -> str:
     """Extract the structure tree reading order for a specific page.
 
     Returns a numbered list of structure elements on that page.
+
+    ``include_mcid_text`` (heading task) additionally pulls a node's marked-
+    content text when it has no /ActualText — real remediated forms keep text
+    in content streams, so without this the model sees a nearly-empty list,
+    can't name current tags ("? -> H1" flags), and emits no usable
+    element_index. Default False preserves the other tasks' prompts.
     """
     lines: list[str] = []
 
@@ -1130,6 +1141,21 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
             return "(invalid page number)"
 
         target_page = pdf.pages[page_num - 1]
+        page_mcid_text: dict[int, str] | None = None
+
+        def _mcid_preview(node: pikepdf.Dictionary) -> str:
+            nonlocal page_mcid_text
+            if page_mcid_text is None:
+                from project_remedy.tag_tree_reader import _extract_mcid_text
+
+                try:
+                    page_mcid_text = _extract_mcid_text(target_page)
+                except Exception:
+                    page_mcid_text = {}
+            return " ".join(
+                text for mcid in _node_mcids(node)
+                if (text := str(page_mcid_text.get(mcid, "")).strip())
+            ).strip()
         order = 0
 
         for node, depth, _parent in walk_structure_tree(pdf):
@@ -1179,6 +1205,7 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
                 }
             ):
                 continue
+            mcid_text = ""
             if (
                 actual is None
                 and not (alt and str(alt).strip())
@@ -1187,13 +1214,19 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
                     or re.match(r"^H[1-6]$", stype)
                 )
             ):
-                continue
+                if include_mcid_text:
+                    mcid_text = _mcid_preview(node)
+                if not mcid_text:
+                    continue
 
             order += 1
             indent = "  " * min(depth, 4)
             line = f"{order:3d}. {indent}/{stype}"
-            if actual and str(actual).strip():
-                preview = str(actual).strip()
+            preview_source = (
+                str(actual).strip() if actual and str(actual).strip() else mcid_text
+            )
+            if preview_source:
+                preview = preview_source
                 if len(preview) > 220:
                     preview = preview[:217].rstrip() + "..."
                 line += f'  (text: "{preview}")'
@@ -1604,7 +1637,11 @@ class HeadingHierarchyVisionAgent:
     ) -> tuple[list[HeadingIssue], str]:
         image_path = render_page_to_image(pdf_path, page_num, dpi=dpi)
         try:
-            logical_order = _get_page_structure_order(pdf_path, page_num)
+            # MCID enrichment: remediated forms keep text in content streams,
+            # not /ActualText — without it the numbered list is nearly empty
+            # and the model can't name current tags or emit a usable index.
+            logical_order = _get_page_structure_order(
+                pdf_path, page_num, include_mcid_text=True)
             response = await self._provider.analyze_image(
                 image_path,
                 heading_hierarchy_quality_prompt(logical_order=logical_order),
