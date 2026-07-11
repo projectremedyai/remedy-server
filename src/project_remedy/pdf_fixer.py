@@ -17228,6 +17228,41 @@ def fix_and_verify(
             pdf_path.stem + "_fixed" + pdf_path.suffix
         )
 
+    # --- Catalog time budget (P6) -------------------------------------------
+    # All controls default to preserving the current behavior. A deadline (when
+    # set) short-circuits the O(pages) verify cycles and the expensive whole-doc
+    # conformance pass; large documents are capped to a single verify cycle so
+    # per-cycle re-validation / per-figure vision cannot dominate on catalogs.
+    import time as _time
+
+    _fix_start = _time.monotonic()
+    try:
+        _deadline_seconds = float(os.environ.get("PDF_FIX_DEADLINE_SECONDS", "0") or "0")
+    except ValueError:
+        _deadline_seconds = 0.0
+    _fix_deadline = _fix_start + _deadline_seconds if _deadline_seconds > 0 else None
+
+    def _past_fix_deadline() -> bool:
+        return _fix_deadline is not None and _time.monotonic() >= _fix_deadline
+
+    try:
+        _large_doc_pages = int(os.environ.get("PDF_FIX_LARGE_DOC_PAGES", "50"))
+    except ValueError:
+        _large_doc_pages = 50
+    if _large_doc_pages > 0:
+        try:
+            with pikepdf.open(pdf_path) as _probe:
+                _probe_page_count = len(_probe.pages)
+        except Exception:
+            _probe_page_count = 0
+        if _probe_page_count > _large_doc_pages:
+            max_cycles = min(max_cycles, 1)
+            logger.info(
+                "fix_and_verify: %s has %d pages (> %d) — capping verify cycles to %d",
+                getattr(pdf_path, "name", pdf_path), _probe_page_count,
+                _large_doc_pages, max_cycles,
+            )
+
     # Cycle 1: full fix_all().
     report = fix_all(
         pdf_path, output_path,
@@ -17251,6 +17286,12 @@ def fix_and_verify(
 
     # Verification cycles.
     for cycle in range(max_cycles):
+        if _past_fix_deadline():
+            report.skipped.append(
+                f"Verify cycle {cycle + 1} skipped — fix deadline "
+                f"({_deadline_seconds:.0f}s) exceeded"
+            )
+            break
         sr_result = validate_tag_tree(output_path)
         if sr_result.passed:
             break
@@ -17363,9 +17404,21 @@ def fix_and_verify(
     except Exception:
         pass
 
-    _apply_final_vision_quality_repairs(report, vision_provider)
+    if _past_fix_deadline():
+        report.skipped.append(
+            f"Final vision quality repair skipped — fix deadline "
+            f"({_deadline_seconds:.0f}s) exceeded"
+        )
+    else:
+        _apply_final_vision_quality_repairs(report, vision_provider)
 
     # Conformance repair: veraPDF-driven structure repair pass.
+    if conformance_repair and _past_fix_deadline():
+        report.skipped.append(
+            f"Conformance repair skipped — fix deadline "
+            f"({_deadline_seconds:.0f}s) exceeded"
+        )
+        conformance_repair = False
     if conformance_repair:
         _STRUCTURE_RULES = {"7.1-1", "7.1-2", "7.1-3", "7.5-1"}
         _UNTAGGED_CONTENT_RULES = {"7.1-3", "7.5-1"}
@@ -17893,6 +17946,28 @@ def _apply_final_vision_quality_repairs(report: FixReport, vision_provider) -> N
         report.skipped.append(f"Final vision quality repair: error — {exc}")
 
 
+def _figure_layout_bbox_area(node: pikepdf.Dictionary) -> float:
+    """Area of a Figure's layout /BBox (P6 top-N-largest ranking).
+
+    /BBox lives on the figure's layout attributes (/A) or, on some producers,
+    directly on the node. Absent → area 0 (kept, but ranked last), so a count
+    cap still bounds the number of vision calls.
+    """
+    bbox = None
+    attrs = node.get("/A")
+    if isinstance(attrs, pikepdf.Dictionary):
+        bbox = attrs.get("/BBox")
+    if bbox is None:
+        bbox = node.get("/BBox")
+    try:
+        if bbox is not None and len(bbox) >= 4:
+            x0, y0, x1, y1 = (float(bbox[i]) for i in range(4))
+            return abs((x1 - x0) * (y1 - y0))
+    except Exception:
+        pass
+    return 0.0
+
+
 def _fix_missing_alt_text(pdf: pikepdf.Pdf, vision_provider) -> int:
     """Second-pass alt text fix: render full page and describe figures by position.
 
@@ -17913,6 +17988,22 @@ def _fix_missing_alt_text(pdf: pikepdf.Pdf, vision_provider) -> int:
     if not figures_no_alt:
         return 0
 
+    # Catalog time budget (P6): cap the figures eligible for the expensive
+    # vision pass to the top-N largest (env-configurable; 0 = unlimited /
+    # current behavior). Ranked by /BBox area where available so the most
+    # meaningful images keep vision-generated alt text; the rest fall through to
+    # the deterministic Strategy-2 fallback below.
+    try:
+        _max_fig_vision = int(os.environ.get("PDF_FIX_MAX_FIGURE_VISION", "0"))
+    except ValueError:
+        _max_fig_vision = 0
+
+    figures_for_vision = figures_no_alt
+    if _max_fig_vision > 0 and len(figures_no_alt) > _max_fig_vision:
+        figures_for_vision = sorted(
+            figures_no_alt, key=_figure_layout_bbox_area, reverse=True
+        )[:_max_fig_vision]
+
     fixed = 0
 
     # Strategy 1: Try page-level rendering with vision model.
@@ -17921,9 +18012,9 @@ def _fix_missing_alt_text(pdf: pikepdf.Pdf, vision_provider) -> int:
             from project_remedy.pdf_vision import render_page_to_image
             import asyncio
 
-            # Group figures by page.
+            # Group figures by page (top-N largest only, per the P6 cap).
             page_figures: dict[int, list[pikepdf.Dictionary]] = {}
-            for node in figures_no_alt:
+            for node in figures_for_vision:
                 page_idx = _find_node_page(node, pdf)
                 page_figures.setdefault(page_idx, []).append(node)
 
