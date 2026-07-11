@@ -10856,10 +10856,15 @@ def fix_heading_hierarchy_quality(
             return []
 
         analyzer = VisionAnalyzer(vision_provider)
+        # The analyzer API is 1-based end to end (render_page_to_image,
+        # _get_page_structure_order — which returns "(invalid page number)"
+        # for 0). Our page sets are 0-based; convert at the boundary or the
+        # model analyzes the WRONG pages without structure context, and
+        # issue.page then round-trips back through the -1 below.
         result = _run_async_callable_blocking(
             analyzer.analyze_heading_hierarchy,
             pdf_path,
-            pages=pages,
+            pages=[p + 1 for p in pages],
         )
         if result is None:
             return []

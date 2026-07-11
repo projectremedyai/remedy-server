@@ -96,7 +96,11 @@ def test_force_pages_analyzes_flagged_pages_and_retags(monkeypatch):
     changes = PF.fix_heading_hierarchy_quality(
         pdf, vision_provider=object(), force_pages=[0])
 
-    assert captured.get("pages") == [0], "must analyze exactly the flagged pages"
+    # The analyzer API (render_page_to_image, _get_page_structure_order) is
+    # 1-based; passing 0-based indexes makes it analyze the WRONG pages and
+    # lose the struct-order context ("(invalid page number)" for 0).
+    assert captured.get("pages") == [1], \
+        "flagged 0-based pages must be converted to the analyzer's 1-based numbering"
     assert PF._get_struct_type(elems[0]) == "H1", "flagged P node must be retagged H1"
     assert PF._get_struct_type(elems[1]) == "P", "body text must be untouched"
     assert changes, "retag must be reported as a change"
@@ -182,7 +186,7 @@ def test_apply_heading_retag_refix_fixes_file_in_place(tmp_path, monkeypatch):
         path, vision_provider=object(), checker_failures=failures)
 
     assert changes, "must report the applied retag"
-    assert captured.get("pages") == [0]
+    assert captured.get("pages") == [1], "analyzer receives 1-based page numbers"
     with pikepdf.open(path) as fixed:
         types = [PF._get_struct_type(n)
                  for n, _d, _p in PF.walk_structure_tree(fixed)]
