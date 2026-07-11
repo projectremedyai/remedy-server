@@ -312,7 +312,7 @@ class OllamaVisionProvider:
             "stream": False,
             "think": False,
             "keep_alive": 0 if is_cloud else os.environ.get("OLLAMA_LOCAL_KEEP_ALIVE", "5m"),
-            "options": {"temperature": 0.2, "num_predict": request_max_tokens},
+            "options": {"temperature": _vision_temperature(), "num_predict": request_max_tokens},
         }
         if image_b64 is not None:
             payload["images"] = [image_b64]
@@ -466,7 +466,7 @@ class OllamaVisionProvider:
                     "think": False,
                     "keep_alive": keep_alive,
                     "options": {
-                        "temperature": 0.2,
+                        "temperature": _vision_temperature(),
                         "num_predict": request_max_tokens,
                     },
                 }
@@ -485,7 +485,7 @@ class OllamaVisionProvider:
                     "model": self.model,
                     "messages": [{"role": "user", "content": content}],
                     "max_tokens": request_max_tokens,
-                    "temperature": 0.2,
+                    "temperature": _vision_temperature(),
                     "stream": self.stream,
                     "reasoning_effort": self.reasoning_effort,
                 }
@@ -721,7 +721,7 @@ class OpenAIVisionProvider:
                 }
             ],
             "max_tokens": max_tokens,
-            "temperature": 0.2,
+            "temperature": _vision_temperature(),
         }
         if response_format is not None:
             payload["response_format"] = response_format
@@ -874,6 +874,29 @@ def _configured_vision_timeout(default: float = 120.0) -> float:
             logger.warning("Invalid %s=%r; using %.0fs", name, raw, default)
             break
     return default
+
+
+def _vision_temperature(default: float = 0.2) -> float:
+    """Sampling temperature for vision requests (OLLAMA_VISION_TEMPERATURE).
+
+    Default 0.2 preserves historical behavior. Set 0 for deterministic
+    verification: the headings-nesting checker re-runs the vision detector as
+    its verifier, and at t>0 every acceptance re-rolls the sampler — the same
+    unchanged page gets *different* heading flags run-to-run, so fixed files
+    flap back to failed. t=0 pins the verdict to the model, not the dice.
+    """
+    raw = os.environ.get("OLLAMA_VISION_TEMPERATURE", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid OLLAMA_VISION_TEMPERATURE=%r; using %.1f", raw, default)
+        return default
+    if value < 0:
+        logger.warning("Negative OLLAMA_VISION_TEMPERATURE=%r; using %.1f", raw, default)
+        return default
+    return value
 
 
 def _env_bool(name: str, *, default: bool = False) -> bool:
