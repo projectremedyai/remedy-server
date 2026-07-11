@@ -312,7 +312,7 @@ class OllamaVisionProvider:
             "stream": False,
             "think": False,
             "keep_alive": 0 if is_cloud else os.environ.get("OLLAMA_LOCAL_KEEP_ALIVE", "5m"),
-            "options": {"temperature": 0.2, "num_predict": request_max_tokens},
+            "options": {"temperature": _vision_temperature(), "num_predict": request_max_tokens},
         }
         if image_b64 is not None:
             payload["images"] = [image_b64]
@@ -466,7 +466,7 @@ class OllamaVisionProvider:
                     "think": False,
                     "keep_alive": keep_alive,
                     "options": {
-                        "temperature": 0.2,
+                        "temperature": _vision_temperature(),
                         "num_predict": request_max_tokens,
                     },
                 }
@@ -485,7 +485,7 @@ class OllamaVisionProvider:
                     "model": self.model,
                     "messages": [{"role": "user", "content": content}],
                     "max_tokens": request_max_tokens,
-                    "temperature": 0.2,
+                    "temperature": _vision_temperature(),
                     "stream": self.stream,
                     "reasoning_effort": self.reasoning_effort,
                 }
@@ -721,7 +721,7 @@ class OpenAIVisionProvider:
                 }
             ],
             "max_tokens": max_tokens,
-            "temperature": 0.2,
+            "temperature": _vision_temperature(),
         }
         if response_format is not None:
             payload["response_format"] = response_format
@@ -874,6 +874,29 @@ def _configured_vision_timeout(default: float = 120.0) -> float:
             logger.warning("Invalid %s=%r; using %.0fs", name, raw, default)
             break
     return default
+
+
+def _vision_temperature(default: float = 0.2) -> float:
+    """Sampling temperature for vision requests (OLLAMA_VISION_TEMPERATURE).
+
+    Default 0.2 preserves historical behavior. Set 0 for deterministic
+    verification: the headings-nesting checker re-runs the vision detector as
+    its verifier, and at t>0 every acceptance re-rolls the sampler — the same
+    unchanged page gets *different* heading flags run-to-run, so fixed files
+    flap back to failed. t=0 pins the verdict to the model, not the dice.
+    """
+    raw = os.environ.get("OLLAMA_VISION_TEMPERATURE", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid OLLAMA_VISION_TEMPERATURE=%r; using %.1f", raw, default)
+        return default
+    if value < 0:
+        logger.warning("Negative OLLAMA_VISION_TEMPERATURE=%r; using %.1f", raw, default)
+        return default
+    return value
 
 
 def _env_bool(name: str, *, default: bool = False) -> bool:
@@ -1095,10 +1118,21 @@ def _resolve_pdf_object(obj):
     return obj
 
 
-def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
+def _get_page_structure_order(
+    pdf_path: Path,
+    page_num: int,
+    *,
+    include_mcid_text: bool = False,
+) -> str:
     """Extract the structure tree reading order for a specific page.
 
     Returns a numbered list of structure elements on that page.
+
+    ``include_mcid_text`` (heading task) additionally pulls a node's marked-
+    content text when it has no /ActualText — real remediated forms keep text
+    in content streams, so without this the model sees a nearly-empty list,
+    can't name current tags ("? -> H1" flags), and emits no usable
+    element_index. Default False preserves the other tasks' prompts.
     """
     lines: list[str] = []
 
@@ -1107,6 +1141,21 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
             return "(invalid page number)"
 
         target_page = pdf.pages[page_num - 1]
+        page_mcid_text: dict[int, str] | None = None
+
+        def _mcid_preview(node: pikepdf.Dictionary) -> str:
+            nonlocal page_mcid_text
+            if page_mcid_text is None:
+                from project_remedy.tag_tree_reader import _extract_mcid_text
+
+                try:
+                    page_mcid_text = _extract_mcid_text(target_page)
+                except Exception:
+                    page_mcid_text = {}
+            return " ".join(
+                text for mcid in _node_mcids(node)
+                if (text := str(page_mcid_text.get(mcid, "")).strip())
+            ).strip()
         order = 0
 
         for node, depth, _parent in walk_structure_tree(pdf):
@@ -1156,6 +1205,7 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
                 }
             ):
                 continue
+            mcid_text = ""
             if (
                 actual is None
                 and not (alt and str(alt).strip())
@@ -1164,13 +1214,19 @@ def _get_page_structure_order(pdf_path: Path, page_num: int) -> str:
                     or re.match(r"^H[1-6]$", stype)
                 )
             ):
-                continue
+                if include_mcid_text:
+                    mcid_text = _mcid_preview(node)
+                if not mcid_text:
+                    continue
 
             order += 1
             indent = "  " * min(depth, 4)
             line = f"{order:3d}. {indent}/{stype}"
-            if actual and str(actual).strip():
-                preview = str(actual).strip()
+            preview_source = (
+                str(actual).strip() if actual and str(actual).strip() else mcid_text
+            )
+            if preview_source:
+                preview = preview_source
                 if len(preview) > 220:
                     preview = preview[:217].rstrip() + "..."
                 line += f'  (text: "{preview}")'
@@ -1581,7 +1637,11 @@ class HeadingHierarchyVisionAgent:
     ) -> tuple[list[HeadingIssue], str]:
         image_path = render_page_to_image(pdf_path, page_num, dpi=dpi)
         try:
-            logical_order = _get_page_structure_order(pdf_path, page_num)
+            # MCID enrichment: remediated forms keep text in content streams,
+            # not /ActualText — without it the numbered list is nearly empty
+            # and the model can't name current tags or emit a usable index.
+            logical_order = _get_page_structure_order(
+                pdf_path, page_num, include_mcid_text=True)
             response = await self._provider.analyze_image(
                 image_path,
                 heading_hierarchy_quality_prompt(logical_order=logical_order),
