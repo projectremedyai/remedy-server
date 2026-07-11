@@ -9726,7 +9726,13 @@ def _heading_tag_from_suggestion(value: str | None) -> str:
     return ""
 
 
-def _is_safe_vision_heading_retag(current_tag: str, target_tag: str) -> bool:
+def _is_safe_vision_heading_retag(
+    current_tag: str,
+    target_tag: str,
+    *,
+    node: pikepdf.Dictionary | None = None,
+    pdf: pikepdf.Pdf | None = None,
+) -> bool:
     if current_tag == target_tag:
         return False
     heading = re.compile(r"^H[1-6]$")
@@ -9734,8 +9740,90 @@ def _is_safe_vision_heading_retag(current_tag: str, target_tag: str) -> bool:
     if target_tag in {"P", "Span"}:
         return bool(heading.match(current_tag))
     if heading.match(target_tag):
-        return current_tag in textish or bool(heading.match(current_tag))
+        if current_tag in textish or bool(heading.match(current_tag)):
+            return True
+        # A "Figure" that actually wraps title TEXT (common producer mis-tag)
+        # may be promoted — but only when the node would still speak: it must
+        # carry ActualText or its marked content must extract real text. A
+        # pure-image Figure (even one with /Alt) must never become a heading.
+        if current_tag == "Figure" and node is not None and pdf is not None:
+            return _figure_retag_has_speakable_text(pdf, node)
     return False
+
+
+def _figure_retag_has_speakable_text(pdf: pikepdf.Pdf, node: pikepdf.Dictionary) -> bool:
+    actual = node.get("/ActualText")
+    if actual is not None and str(actual).strip():
+        return True
+    mcids = _get_node_mcids(node)
+    if not mcids:
+        return False
+    page_idx = _shared_find_node_page(node, pdf)
+    if page_idx is None or page_idx < 0 or page_idx >= len(pdf.pages):
+        return False
+    try:
+        texts = _extract_mcid_text(pdf.pages[page_idx])
+    except Exception:
+        return False
+    return any(str(texts.get(mcid, "")).strip() for mcid in mcids)
+
+
+_HEADING_RETAG_PAGE_RE = re.compile(r"^Page\s+(\d+):")
+
+
+def heading_retag_pages_from_failures(failures) -> list[int]:
+    """0-based pages the acceptance checker flagged for heading retags.
+
+    Parses ``headings-nesting`` checker failures for vision-format details
+    ("Page N: ... (P -> H1) (Retag as H1)"). Deterministic ordering details
+    ("First heading is H2...", "Skipped from H1 to H3") carry no page/retag
+    information and are ignored. Accepts CheckResult-style objects or dicts.
+    """
+    pages: set[int] = set()
+    for failure in failures or []:
+        if isinstance(failure, dict):
+            rule_id = failure.get("rule_id", "")
+            details = failure.get("details") or []
+        else:
+            rule_id = getattr(failure, "rule_id", "")
+            details = getattr(failure, "details", None) or []
+        if str(rule_id) != "headings-nesting":
+            continue
+        for detail in details:
+            text = str(detail)
+            match = _HEADING_RETAG_PAGE_RE.match(text)
+            if not match or "->" not in text:
+                continue
+            page = int(match.group(1)) - 1
+            if page >= 0:
+                pages.add(page)
+    return sorted(pages)
+
+
+def apply_heading_retag_refix(
+    pdf_path: Path,
+    *,
+    vision_provider,
+    checker_failures,
+) -> list[str]:
+    """Targeted feedback refix: apply heading retags on checker-flagged pages.
+
+    Bridges the gap between detection and repair: the acceptance checker's
+    vision pass reports mis-tagged headings ("Page N: ... (P -> H1)"), but the
+    generic refix replays the same gated pipeline that missed them. This opens
+    ``pdf_path`` in place, runs the vision heading-quality retag pass on
+    exactly the flagged pages, and saves only when something changed.
+    """
+    pages = heading_retag_pages_from_failures(checker_failures)
+    if not pages or vision_provider is None:
+        return []
+    with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
+        changes = fix_heading_hierarchy_quality(
+            pdf, vision_provider=vision_provider, force_pages=pages,
+        )
+        if changes:
+            pdf.save(pdf_path)
+    return changes
 
 
 def _vision_heading_text_candidates(issue: object) -> list[str]:
@@ -10679,21 +10767,33 @@ def _fix_subtitle_and_transitional_headings(pdf: pikepdf.Pdf) -> list[str]:
     return changes
 
 
-def fix_heading_hierarchy_quality(pdf: pikepdf.Pdf, *, vision_provider=None) -> list[str]:
+def fix_heading_hierarchy_quality(
+    pdf: pikepdf.Pdf,
+    *,
+    vision_provider=None,
+    force_pages: list[int] | None = None,
+) -> list[str]:
     """Use vision to repair visually wrong heading levels/tags.
 
     Structural nesting fixes cannot tell whether a visible heading really is
     a heading. This pass asks the vision model for element-indexed corrections
     and applies only safe retags to text-like structure nodes.
+
+    ``force_pages`` (0-based) bypasses page sampling — used by the
+    failure-driven refix to target exactly the pages the acceptance checker
+    flagged, instead of hoping the sample includes them.
     """
     if vision_provider is None or len(pdf.pages) == 0:
         return []
 
-    pages = _sample_vision_page_numbers(
-        set(range(len(pdf.pages))),
-        limit_env="PDF_HEADING_QUALITY_MAX_PAGES",
-        default_limit=2 if len(pdf.pages) > 50 else min(len(pdf.pages), 20),
-    )
+    if force_pages is not None:
+        pages = sorted({int(p) for p in force_pages if 0 <= int(p) < len(pdf.pages)})
+    else:
+        pages = _sample_vision_page_numbers(
+            set(range(len(pdf.pages))),
+            limit_env="PDF_HEADING_QUALITY_MAX_PAGES",
+            default_limit=2 if len(pdf.pages) > 50 else min(len(pdf.pages), 20),
+        )
     if not pages:
         return []
 
@@ -10815,7 +10915,7 @@ def fix_heading_hierarchy_quality(pdf: pikepdf.Pdf, *, vision_provider=None) -> 
 
         node = nodes[idx]
         current_tag = _get_struct_type(node)
-        if not _is_safe_vision_heading_retag(current_tag, target_tag):
+        if not _is_safe_vision_heading_retag(current_tag, target_tag, node=node, pdf=pdf):
             continue
         node["/S"] = pikepdf.Name(f"/{target_tag}")
         retagged += 1
