@@ -8,7 +8,10 @@ from typing import Any
 
 from project_remedy.behavioral_proxies.shared.base import BehavioralTestResult
 from project_remedy.behavioral_proxies.shared.transcript_analysis import (
+    DUPLICATED_CONTENT_RATIO,
+    _is_form_scaffold_line,
     analyze_transcript_text,
+    duplicated_content_ratio,
 )
 from project_remedy.tag_tree_reader import TagTreeReport, read_tag_tree
 
@@ -33,6 +36,10 @@ def analyze_tag_tree_report(report: TagTreeReport) -> list[dict[str, Any]]:
         )
     )
 
+    # Page-order backtracking is the authoritative multi-page duplication /
+    # reading-order-corruption signal — counted once per document (the ``break``
+    # stops at the first regression so a doubled tree costs a single error, not
+    # one per revisited node).
     last_page = -1
     for node_index, node in enumerate(report.nodes, start=1):
         if not (node.text or node.alt_text or "").strip():
@@ -51,17 +58,41 @@ def analyze_tag_tree_report(report: TagTreeReport) -> list[dict[str, Any]]:
             break
         last_page = node.page
 
+    # Single-page (or otherwise non-backtracking) full duplication: flag as a
+    # hard error only when a large fraction of the transcript is redundant.
+    transcript_lines = [
+        " ".join(line.split())
+        for line in report.reading_order_text.splitlines()
+    ]
+    transcript_lines = [line for line in transcript_lines if line]
+    dup_ratio = duplicated_content_ratio(transcript_lines)
+    if dup_ratio >= DUPLICATED_CONTENT_RATIO:
+        findings.append(
+            {
+                "severity": "error",
+                "issue": "duplicated_document_content",
+                "message": (
+                    f"{dup_ratio:.0%} of the transcript is redundant repeated "
+                    "content — the document appears duplicated."
+                ),
+                "redundant_ratio": round(dup_ratio, 3),
+            }
+        )
+
+    # Repeated blocks are advisory (severity "info"): legitimate multi-category
+    # forms repeat prompt/rating blocks. Form-control scaffold lines are excluded
+    # for the same reason as repeated_transcript_line.
     block_counts = Counter(
         " ".join((node.text or node.alt_text or "").split())
         for node in report.nodes
         if (node.text or node.alt_text or "").strip()
     )
     for block, count in sorted(block_counts.items()):
-        if len(block) < 40 or count < 3:
+        if len(block) < 40 or count < 3 or _is_form_scaffold_line(block):
             continue
         findings.append(
             {
-                "severity": "warning",
+                "severity": "info",
                 "issue": "repeated_transcript_block",
                 "message": f"Transcript block repeats {count} times.",
                 "preview": block[:120],

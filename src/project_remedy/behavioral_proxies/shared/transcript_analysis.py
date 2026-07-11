@@ -49,6 +49,57 @@ _HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A document is treated as genuinely *duplicated* (a real reading-order defect)
+# only when at least this fraction of the transcript's characters are redundant
+# copies of earlier lines. Legitimate forms/grids repeat structural labels but
+# stay well under this (observed <=0.25 across the LAMC corpus); a full second
+# copy of the document lands at ~0.5+.
+DUPLICATED_CONTENT_RATIO = 0.5
+
+
+def _is_form_scaffold_line(line: str) -> bool:
+    """A form-control scaffold announcement (e.g. ``[Form: Checkbox field]``).
+
+    These are injected once per interactive field, so they repeat inherently in
+    any form and are not a reading-order defect — a screen-reader user expects a
+    checkbox announcement at every checkbox.
+    """
+    return line.lstrip().startswith("[Form:")
+
+
+def _dedupe_adjacent(lines: list[str]) -> list[str]:
+    """Collapse runs of identical adjacent lines to a single occurrence.
+
+    A grid column read row-by-row (same rating label per row, a stack of
+    identical checkbox announcements) is legitimate repetition, not a
+    comprehension hazard, so it should not inflate the repeated-line count.
+    """
+    collapsed: list[str] = []
+    for line in lines:
+        if not collapsed or collapsed[-1] != line:
+            collapsed.append(line)
+    return collapsed
+
+
+def duplicated_content_ratio(lines: list[str]) -> float:
+    """Fraction of transcript characters that are redundant repeated copies.
+
+    Counts, for every non-scaffold line of >=20 chars appearing ``k>1`` times,
+    the ``(k-1)`` excess copies, over the total transcript character count.
+    Near 0 for legitimate forms; ~0.5+ when the whole document is duplicated.
+    """
+    counts: dict[str, int] = {}
+    total = 0
+    for line in lines:
+        total += len(line)
+        if len(line) < 20 or _is_form_scaffold_line(line):
+            continue
+        counts[line] = counts.get(line, 0) + 1
+    if total <= 0:
+        return 0.0
+    redundant = sum((count - 1) * len(line) for line, count in counts.items() if count > 1)
+    return redundant / total
+
 
 def analyze_transcript_text(
     transcript: str,
@@ -69,11 +120,16 @@ def analyze_transcript_text(
         ]
 
     findings: list[dict[str, Any]] = []
+    # Repeated lines are advisory (severity "info"): legitimate forms and grids
+    # repeat structural labels, so this does not, on its own, indicate a
+    # reading-order defect. Genuine full-document duplication is scored via
+    # ``page_order_backtracking`` (multi-page) and ``duplicated_document_content``
+    # (the redundant-content ratio) instead.
     repeated = _repeated_lines(lines)
     for line, count in repeated.items():
         findings.append(
             {
-                "severity": "warning",
+                "severity": "info",
                 "issue": "repeated_transcript_line",
                 "message": f"Transcript line repeats {count} times.",
                 "preview": line[:120],
@@ -180,9 +236,12 @@ def _tokens_without_role(
 
 
 def _repeated_lines(lines: list[str]) -> dict[str, int]:
+    # Collapse adjacent duplicates and drop form-control scaffold announcements
+    # before counting — both are legitimate structural repetition.
+    collapsed = _dedupe_adjacent(lines)
     counts: dict[str, int] = {}
-    for line in lines:
-        if len(line) < 20:
+    for line in collapsed:
+        if len(line) < 20 or _is_form_scaffold_line(line):
             continue
         counts[line] = counts.get(line, 0) + 1
     return {
