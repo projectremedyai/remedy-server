@@ -21,7 +21,7 @@ STABLE_ALIAS = "qwen3vl-32b-remedy"
 TASK_MODEL_MAP = {
     "contrast": "qwen3vl-32b-remedy-contrast-v1",
     "reading_order": "qwen3vl-32b-remedy-reading-order-v1",
-    "heading_hierarchy": "qwen3vl-32b-remedy-heading-v1",
+    "heading_hierarchy": "qwen3vl-32b-remedy-heading-v2",  # v2 2026-07-11: LAMC delivered-arbitration retrain
     "table_structure": "qwen3vl-32b-remedy-table-v1",
 }
 
@@ -278,7 +278,7 @@ def build_adapter_maps(args: argparse.Namespace) -> tuple[dict[str, Path], dict[
         "heading_v1": _adapter_path(
             root,
             args.heading_adapter,
-            "outputs/lamc-qwen3vl-32b-heading-lora",
+            "outputs/lamc-qwen3vl-32b-heading-v2-lora",
         ),
     }
     aliases = {
