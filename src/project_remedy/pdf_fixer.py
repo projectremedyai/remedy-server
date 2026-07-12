@@ -17006,6 +17006,10 @@ ALL_FIXES: list[tuple[str, callable, str]] = [
     ("headings-nesting", fix_heading_nesting, "Appropriate heading nesting"),
     ("headings-hierarchy-quality", fix_heading_hierarchy_quality, "Visual heading hierarchy matches structure tags"),
     ("pdfua-id", fix_pdfua_identifier, "PDF/UA-1 identifier"),
+    # 7.10-1: the fixer existed since the OCG work but was never registered,
+    # so /D configs without /Name could never converge through fix_all.
+    ("ocg-config-name", fix_optional_content_config_names,
+     "Optional content configurations define /Name (7.10-1)"),
     ("role-map", fix_role_map, "RoleMap /NonStruct → /Span"),
     ("bdc-emc-balance", fix_bdc_emc_balance, "BDC/EMC marked content balance"),
     ("artifact-mcid-retag", fix_artifact_mcids_tagged_as_real_content, "MCID-bearing Artifact spans use real structure tags"),
