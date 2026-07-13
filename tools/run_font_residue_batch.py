@@ -68,6 +68,10 @@ def failed_clauses(path):
 
 def process(inp, outdir):
     name = os.path.basename(inp)
+    # An input that does not exist is a LIST bug (e.g. a name with spaces split
+    # into argv words), not a veraPDF failure -- say so instead of burying it.
+    if not os.path.isfile(inp):
+        return {"file": name, "status": "MISSING"}
     before = failed_clauses(inp)
     if before is None:
         return {"file": name, "status": "VERAPDF_ERROR"}
@@ -144,11 +148,19 @@ def main(argv):
     os.makedirs(outdir, exist_ok=True)
     results = []
     for f in files:
-        r = process(f, outdir)
+        # One malformed input must not abandon the rest of the batch: a single
+        # unhandled fontTools error used to kill the run mid-list and silently
+        # leave the remaining files unprocessed.
+        try:
+            r = process(f, outdir)
+        except Exception as exc:
+            r = {"file": os.path.basename(f), "status": "ERROR",
+                 "error": f"{type(exc).__name__}: {exc}"}
         results.append(r)
         tag = {"PASS": "✅ PASS", "PARTIAL": "◐ PARTIAL", "NO_APPLICABLE_PASS": "· none",
                "REGRESSION_DISCARDED": "✗ REGRESSION", "VERAPDF_ERROR": "! verapdf",
-               "FIDELITY_DISCARDED": "✗ FIDELITY",
+               "FIDELITY_DISCARDED": "✗ FIDELITY", "MISSING": "! missing",
+               "ERROR": "‼ ERROR",
                "VERAPDF_ERROR_OUT": "! verapdf-out"}.get(r["status"], r["status"])
         extra = ""
         if r.get("cleared"): extra += f" cleared={r['cleared']}"
