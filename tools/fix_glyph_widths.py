@@ -13,12 +13,25 @@ import pikepdf
 from fontTools.ttLib import TTFont
 
 def _load_program(fd):
-    """Return (TTFont, kind) for the embedded program in a FontDescriptor, or (None,None)."""
+    """Return (TTFont, kind) for the embedded program in a FontDescriptor, or (None,None).
+
+    TTFont parses tables lazily, so a malformed program (e.g. a subsetted
+    TrueType whose hmtx is truncated relative to hhea.numberOfHMetrics -- real
+    in the LAMC corpus) constructs fine and only raises later, deep in the width
+    walk. Force the tables we depend on to decompile HERE so a bad program is
+    reported as "no program" and skipped: we cannot honestly rewrite widths from
+    a font we cannot read, and a guessed width is worse than a failing clause.
+    """
     for key, kind in (("/FontFile2","tt"), ("/FontFile3","cff")):
         if key in fd:
             try:
                 data = bytes(fd[key].read_bytes())
-                return TTFont(io.BytesIO(data)), kind
+                tt = TTFont(io.BytesIO(data))
+                tt.getGlyphOrder()
+                tt.getGlyphSet()          # decompiles hmtx/glyf -- the usual fault line
+                _ = tt["head"].unitsPerEm
+                _ = tt["maxp"].numGlyphs
+                return tt, kind
             except Exception:
                 return None, None
     return None, None
