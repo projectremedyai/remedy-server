@@ -32,6 +32,12 @@ import pikepdf
 
 logger = logging.getLogger(__name__)
 
+# Upper bound for a table cell's /ColSpan or /RowSpan. No real table has 1024
+# columns; anything above this is corruption. Summing such a value back into a row
+# width is what produced the runaway spans (32 -> 373 -> 7,208,595) in the LAMC
+# calendars -- see tests/unit/test_table_colspan_runaway.py.
+MAX_TABLE_SPAN = 1024
+
 from project_remedy.ocr_escalation import (
     OCREscalationSignal,
     available_specialized_ocr_adapters,
@@ -14702,10 +14708,19 @@ def fix_table_regularity(pdf: pikepdf.Pdf, *, vision_provider=None) -> list[str]
 
     When *vision_provider* is supplied, uses vision model to analyze
     table structure and determine correct cell spans.
+
+    A row's width is the SUM of its cells' /ColSpan values, and ``target_width`` is
+    the max row width -- so a bogus span feeds straight back in and grows on every
+    pass. That runaway shipped /ColSpan 7,208,595 in a delivered file (see
+    tests/unit/test_table_colspan_runaway.py). Spans are therefore clamped to
+    MAX_TABLE_SPAN on read AND on write, and any absurd value already in the file is
+    sanitised before the widths are computed, so re-remediating a damaged file
+    repairs it instead of compounding it.
     """
     import asyncio
 
     changes = []
+    sanitized_spans = 0
 
     # Walk structure tree for tables
     try:
@@ -14752,26 +14767,31 @@ def fix_table_regularity(pdf: pikepdf.Pdf, *, vision_provider=None) -> list[str]
                 return attr_dict, None
             return None, None
 
-        def _get_cell_span(cell: pikepdf.Dictionary, key: str) -> int:
+        def _sane_span(value) -> int | None:
+            """A span above MAX_TABLE_SPAN is corruption, not a table: treat it as
+            absent (1) so it can never be summed back into a row width."""
             try:
-                value = cell.get(key)
-                if value is not None:
-                    return max(1, int(value))
+                span = int(value)
             except Exception:
-                pass
+                return None
+            if span < 1 or span > MAX_TABLE_SPAN:
+                return None
+            return span
+
+        def _get_cell_span(cell: pikepdf.Dictionary, key: str) -> int:
+            span = _sane_span(cell.get(key))
+            if span is not None:
+                return span
 
             attr_dict, _attr_array = _get_table_attr_dict(cell)
             if attr_dict is not None:
-                try:
-                    value = attr_dict.get(key)
-                    if value is not None:
-                        return max(1, int(value))
-                except Exception:
-                    pass
+                span = _sane_span(attr_dict.get(key))
+                if span is not None:
+                    return span
             return 1
 
         def _set_cell_span(cell: pikepdf.Dictionary, key: str, value: int) -> bool:
-            value = max(1, int(value))
+            value = min(MAX_TABLE_SPAN, max(1, int(value)))
             changed = False
 
             if _get_cell_span(cell, key) != value or cell.get(key) is None:
@@ -14827,6 +14847,23 @@ def fix_table_regularity(pdf: pikepdf.Pdf, *, vision_provider=None) -> list[str]
                     _collect_table_rows(child, rows)
             return rows
 
+        # Scrub corruption BEFORE measuring anything, across EVERY dictionary that
+        # carries a span -- not just cells reachable from a collected table. Two
+        # reasons that breadth is required on the real damaged files: the value
+        # usually lives in the cell's /A attribute dict (itself an object here, with
+        # /ColSpan set directly), and some carriers are no longer typed /TD or /TH at
+        # all. A span this large is meaningless wherever it sits, so clamp it in place.
+        for obj in pdf.objects:
+            if not isinstance(obj, pikepdf.Dictionary):
+                continue
+            for key in ("/ColSpan", "/RowSpan"):
+                stored = obj.get(key)
+                if stored is None:
+                    continue
+                if _sane_span(stored) is None:
+                    obj[key] = 1
+                    sanitized_spans += 1
+
         for table in tables:
             raw_rows = _collect_table_rows(table)
             row_nodes = []
@@ -14865,8 +14902,19 @@ def fix_table_regularity(pdf: pikepdf.Pdf, *, vision_provider=None) -> list[str]
             row_widths = [width for _row, _cells, _spans, width, _active in row_nodes if width]
             if row_widths and len(set(row_widths)) > 1:
                 irregular_count += 1
+                # A row's width is the SUM of its spans, so taking max(row_widths)
+                # naked lets a width we OURSELVES widened on the last pass become the
+                # next pass's target -- the ratchet that drove 32 -> 373 -> millions.
+                # The real column count cannot exceed the cell count of the widest
+                # row, so bound the target by that and the repair converges.
+                cell_count_bound = max(
+                    (len(cells) for _row, cells, _spans, _w, _a in row_nodes if cells),
+                    default=0,
+                )
                 target_width = max(row_widths)
-                max_width = max(row_widths)
+                if cell_count_bound:
+                    target_width = min(target_width, cell_count_bound)
+                max_width = target_width
                 single_width_rows = sum(1 for width in row_widths if width == 1)
                 if max_width >= 6 and single_width_rows >= max(3, len(row_widths) // 2):
                     target_width = max_width

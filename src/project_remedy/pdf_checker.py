@@ -32,6 +32,11 @@ from project_remedy.pdf_semantics import (
     node_has_direct_content as _shared_node_has_direct_content,
 )
 
+# Mirrors pdf_fixer.MAX_TABLE_SPAN (defined locally rather than imported: pdf_fixer
+# imports from this module's neighbours and the cycle is not worth it). Above this,
+# a cell span is corruption, not a table.
+MAX_TABLE_SPAN = 1024
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -2674,22 +2679,29 @@ class PDFAccessibilityChecker:
                 return attr_dict
             return None
 
-        def _get_cell_span(cell: pikepdf.Dictionary, key: str) -> int:
+        def _sane_span(value) -> int | None:
+            """Clamp a span the way the fixer does. Files already in the wild carry
+            corrupt spans (a delivered PDF has /ColSpan 7,208,595): without this the
+            `range(col_idx, col_idx + span)` below materialises a 60M-element set per
+            cell and the checker never returns."""
             try:
-                value = cell.get(key)
-                if value is not None:
-                    return max(1, int(value))
+                span = int(value)
             except Exception:
-                pass
+                return None
+            if span < 1 or span > MAX_TABLE_SPAN:
+                return None
+            return span
+
+        def _get_cell_span(cell: pikepdf.Dictionary, key: str) -> int:
+            span = _sane_span(cell.get(key))
+            if span is not None:
+                return span
 
             attr_dict = _get_table_attr_dict(cell)
             if attr_dict is not None:
-                try:
-                    value = attr_dict.get(key)
-                    if value is not None:
-                        return max(1, int(value))
-                except Exception:
-                    pass
+                span = _sane_span(attr_dict.get(key))
+                if span is not None:
+                    return span
             return 1
 
         def _iter_table_rows(table: pikepdf.Dictionary):
