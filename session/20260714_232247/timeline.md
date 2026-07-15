@@ -79,3 +79,21 @@
 - Copied serving reports, vLLM logs, pull logs, and remote SHA-256 manifest to `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`.
 - Stopped `remedy-qwen25-vllm-serving-20260715` through the budget controller at 2026-07-15T18:36:42Z. The local ledger records $0.5285 for this serving-only window and $9.0366 cumulative conservative spend.
 - Requested delete after artifact transfer with `brev delete` by name, by ID, and through stdin. The final `brev ls` still showed the VM as `STOPPED`, not `RUNNING`; compute is stopped, but the Brev UI should be checked for lingering storage charges.
+
+## 2026-07-15 11:45:07 PDT
+- Added guarded `start-existing` support in commit `4dcb5bb`.
+- Attempted to restart stopped serving VM `remedy-qwen25-vllm-serving-20260715`; `brev start` looped on `instance is stopped`. The command was interrupted before the budget controller recorded an active paid window.
+- Launched fresh A100 VM `remedy-qwen25-sft-smoke-20260715` for a 1.5-hour Qwen2.5 SFT smoke at $1.98/hour.
+- Uploaded 477 MB payload `remedy-nemo-sft-payload-4dcb5bb.tar.gz` with SHA-256 `29685583c1d51c5b439705541dcff36cfa59caf6d0df3bbb8efdf53a3c2f3f47`.
+- Official `nvcr.io/nvidia/nemo-rl:v0.6.0` setup completed on A100 with `nemo_rl_and_gym_import_ok`.
+- Initial SFT wrapper failed because `uv run --project /home/ubuntu/RL` cannot resolve NeMo's `nemo-gym` workspace source in this cloned layout. The campaign launcher was patched to call `python /home/ubuntu/RL/examples/run_vlm_sft.py` directly.
+- NeMo Automodel rejected `match_all_linear=true` with non-empty `exclude_modules`; the recipes were patched to explicit Qwen language-layer LoRA targets.
+- The SFT smoke then loaded Qwen2.5 on A100 and reached the first dataloader batch, but every tested variant failed with Qwen2.5-VL `image_grid_thw` index error:
+  - original relative paths / image-first content
+  - text-first content
+  - absolute image paths
+  - native Qwen chat template
+  - native Qwen chat template with BOS/EOS disabled
+  - validation disabled
+- Stopped `remedy-qwen25-sft-smoke-20260715` through the budget controller at 2026-07-15T19:13:26Z. The local ledger records $0.9347 for this SFT smoke and $9.9713 cumulative conservative spend.
+- Requested deletion for `remedy-qwen25-sft-smoke-20260715`; the CLI returned successfully, but final `brev ls` still showed it as `STOPPED`. The earlier serving VM no longer appeared in `brev ls`.

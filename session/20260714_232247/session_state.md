@@ -4,13 +4,13 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-15 11:37:24 PDT
+- Updated: 2026-07-15 12:13:26 PDT
 
 ## Goal
 Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
 
 ## Current Subtask
-Proceed with the Qwen2.5-VL-3B low-cost path and preserve the passed serving/runtime evidence under the $50 Brev credit constraint.
+Fix the NeMo RL VLM SFT data-processor compatibility blocker before spending more on Qwen2.5 training.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -55,6 +55,13 @@ Proceed with the Qwen2.5-VL-3B low-cost path and preserve the passed serving/run
 - Local serving proof artifacts are under `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`, including probe reports, vLLM logs, pull logs, and remote SHA-256 manifest.
 - The serving VM was stopped through the budget controller at 2026-07-15T18:36:42Z. `brev_state.json` records $0.5285 for this serving-only window and $9.0366 conservative local tracked spend.
 - Delete was requested after artifact transfer with `brev delete` by name, by ID, and through stdin. The final `brev ls` still showed `STOPPED`, not `RUNNING`; treat compute as stopped but verify/delete manually if storage charges appear.
+- Added guarded restart support in commit `4dcb5bb`, but `brev start remedy-qwen25-vllm-serving-20260715` stayed in a loop reporting `instance is stopped`; the command was interrupted before the budget controller recorded an active window.
+- Launched fresh A100 VM `remedy-qwen25-sft-smoke-20260715` for a 1.5-hour Qwen2.5 SFT smoke at $1.98/hour. The payload SHA-256 was `29685583c1d51c5b439705541dcff36cfa59caf6d0df3bbb8efdf53a3c2f3f47`.
+- The SFT smoke proved the fresh A100 VM, official NeMo RL image, pinned RL/Gym setup, Qwen2.5 model load, and explicit language-module LoRA recipe up to the first dataloader batch.
+- The SFT smoke did not produce a checkpoint. It stopped on a NeMo RL VLM SFT processor compatibility blocker: `IndexError: index 1 is out of bounds for dimension 0 with size 1` in Qwen2.5-VL `image_grid_thw`.
+- Variants tried before stopping: text-first content order, absolute image paths, native Qwen chat template, disabling BOS/EOS, and disabling validation. Training still fails on the first dataloader batch.
+- The SFT smoke VM was stopped through the budget controller at 2026-07-15T19:13:26Z. `brev_state.json` records $0.9347 for this SFT smoke window and $9.9713 conservative local tracked spend.
+- `brev delete remedy-qwen25-sft-smoke-20260715` returned successfully, but final `brev ls` still showed the SFT VM as `STOPPED`, not `RUNNING`. The earlier stopped serving VM no longer appeared in `brev ls`.
 - Remote reports could not be copied after the stop because SSH reset during shutdown. The captured JSON output is summarized in `session/20260714_232247/compatibility_results_20260715.md`.
 - Fresh final verification passed: 347 unit tests passed, one skipped; shell syntax, Python compilation, and all campaign YAML files also passed.
 
@@ -68,6 +75,7 @@ Proceed with the Qwen2.5-VL-3B low-cost path and preserve the passed serving/run
 - [x] Prove Brev VM mode with the official NeMo RL container after a tiny custom-container preflight failure.
 - [x] Run target/control training-side compatibility under the split runtime plan.
 - [x] Re-run the serving-side vLLM gate on a fresh/larger serving-only runtime.
+- [x] Run a low-cost Qwen2.5 SFT smoke and identify the next blocker.
 - [x] Run a fresh full local verification.
 - [x] Commit the provisioning hardening and final handoff.
 
@@ -84,3 +92,4 @@ Proceed with the Qwen2.5-VL-3B low-cost path and preserve the passed serving/run
 - Do not install vLLM into the NeMo RL training image for the next spike. Treat training and serving as separate runtimes or build explicit derived images.
 - The second H100 VM stop showed Brev status lag: guarded stop recorded success, direct stop then reported the backend state was already `stopped`, while `brev ls` displayed `STOPPING`. Re-check `brev ls` before any paid restart and delete stopped instances if storage cost becomes a concern.
 - `vllm/vllm-openai:v0.25.1` is not compatible with the current Crusoe A100 80GB driver stack observed in this Brev VM. Use `vllm/vllm-openai:v0.8.5` for the Qwen2.5 serving-only gate unless a newer driver image/host is intentionally selected.
+- Do not start another paid SFT run until the Qwen2.5-VL NeMo `sft_processor` / `image_grid_thw` failure is reproduced and fixed locally or with a minimal unpaid/short smoke.

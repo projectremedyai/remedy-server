@@ -21,7 +21,11 @@ The serving-only follow-up is also complete. Commit `8c95465` added the reusable
 
 Serving artifacts are copied locally under `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`. The serving VM was stopped through the guarded controller after artifact transfer. Delete was requested with `brev delete` by name, by ID, and through the documented stdin form, but the last `brev ls` still showed `STOPPED`, not `RUNNING`; treat compute as stopped and verify/delete manually in the Brev UI if storage charges appear.
 
-Tracked campaign spend in the local elapsed-time ledger is now $9.0366. The user's NVIDIA Billing screenshot is authoritative provider state and showed $7.28 total cost with $45.94 balance before the short serving-only rerun settled. The latest serving VM cost in the local ledger is $0.5285. Earlier Brev stops/deletes had status lag, so always re-check `brev ls` before any paid restart.
+Tracked campaign spend in the local elapsed-time ledger is now $9.9713. The user's NVIDIA Billing screenshot is authoritative provider state and showed $7.28 total cost with $45.94 balance before the short serving-only and SFT-smoke reruns settled. The serving VM cost $0.5285 locally, and the SFT smoke cost $0.9347 locally. Earlier Brev stops/deletes had status lag, so always re-check `brev ls` before any paid restart.
+
+The first low-cost Qwen2.5 SFT smoke is complete and stopped. `remedy-qwen25-sft-smoke-20260715` launched on `a100-80gb.1x` at $1.98/hour with a 1.5-hour watchdog. It cost $0.9347 in the local ledger and raised conservative tracked spend to $9.9713. It did not produce a checkpoint. It proved the A100 VM, official NeMo image, pinned RL/Gym setup, Qwen2.5 model load, and explicit language-module LoRA recipe, then failed at the first NeMo VLM SFT dataloader batch with `IndexError: index 1 is out of bounds for dimension 0 with size 1` in Qwen2.5-VL `image_grid_thw`. See `session/20260714_232247/qwen25_sft_smoke_20260715.md`.
+
+Final Brev state from the CLI: no active compute in the local budget controller; `brev ls` shows only `remedy-qwen25-sft-smoke-20260715` as `STOPPED`. `brev delete remedy-qwen25-sft-smoke-20260715` returned successfully but did not remove it from the list immediately. The earlier stopped serving VM has disappeared from `brev ls`.
 
 ## Next Actions
 - Do not repeat Brev custom-container mode; it failed across earlier full attempts and the tiny known-good NVIDIA preflight.
@@ -30,7 +34,7 @@ Tracked campaign spend in the local elapsed-time ledger is now $9.0366. The user
 - For training-side work, use Qwen2.5-VL-3B-Instruct as the measured fallback unless Qwen3.5 is deliberately re-tested with a different memory strategy.
 - For serving-side work, use a separate serving runtime. The measured working path is `vllm/vllm-openai:v0.8.5` with `--max-model-len 8192` for Qwen2.5-VL-3B on a single A100 80GB. Do not co-locate the NeMo image, vLLM image, payload, and both model caches on a 100 GB root disk again.
 - Keep the same $50 hard stop, $40 no-new-work threshold, one-GPU limit, and automatic wall-time watchdog.
-- Next paid work should be a very small Qwen2.5-VL-3B frozen baseline/eval window, followed by the smallest SFT smoke that can produce evidence inside the remaining credit. Do not spend more on Qwen3.5 unless intentionally testing a different memory strategy.
+- Next work should be local/offline if possible: reproduce and fix the NeMo RL VLM `sft_processor` / `image_grid_thw` failure with a minimal Qwen2.5 row before another paid SFT run. Do not spend more on Qwen3.5 unless intentionally testing a different memory strategy.
 
 ## Watch Outs
 - Never train from or overwrite the three held-out catalogs.
@@ -39,3 +43,4 @@ Tracked campaign spend in the local elapsed-time ledger is now $9.0366. The user
 - Do not use the 4x A100 escalation under the current allocation without fresh user approval.
 - Keep Brev-generated artifacts under `/ephemeral` and never print secrets from `/home/ubuntu/RL/.env`.
 - The $8.5081 spend is a local elapsed-time estimate, not a provider invoice.
+- The SFT smoke logs were not copied before shutdown; SSH closed immediately after stop. The important failure traces are summarized in `qwen25_sft_smoke_20260715.md` from the captured terminal output.
