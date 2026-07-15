@@ -64,30 +64,73 @@ def active_accrued_cost(state: BrevCampaignState, now: datetime | None = None) -
     return elapsed / 3600.0 * state.active_hourly_rate_usd
 
 
+def finalize_active_state(
+    state: BrevCampaignState,
+    ended_at: datetime,
+    *,
+    outcome: str,
+) -> BrevCampaignState:
+    """Record elapsed cost and clear an externally ended active instance."""
+
+    if not state.active_instance:
+        return state
+    instance = state.active_instance
+    run_cost = active_accrued_cost(state, ended_at)
+    state.recorded_spend_usd = round(state.recorded_spend_usd + run_cost, 4)
+    state.history.append(
+        {
+            "instance": instance,
+            "started_at": state.active_started_at,
+            "stopped_at": ended_at.isoformat(),
+            "hourly_rate_usd": state.active_hourly_rate_usd,
+            "cost_usd": round(run_cost, 4),
+            "outcome": outcome,
+        }
+    )
+    state.active_instance = None
+    state.active_started_at = None
+    state.active_hourly_rate_usd = None
+    state.active_deadline = None
+    return state
+
+
 def build_create_command(
     *,
     instance_name: str,
     instance_type: str,
     startup_script: str,
+    minimum_disk_gb: int = 100,
+    mode: str = "container",
 ) -> list[str]:
     """Build the exact pinned, stoppable, single-container Brev create command."""
 
-    return [
+    if mode not in {"container", "vm"}:
+        raise ValueError(f"unsupported Brev mode: {mode}")
+    command = [
         "brev",
         "create",
         instance_name,
         "--type",
         instance_type,
+        "--min-disk",
+        str(minimum_disk_gb),
         "--stoppable",
         "--mode",
-        "container",
-        "--container-image",
-        NEMO_RL_IMAGE,
+        mode,
+    ]
+    if mode == "container":
+        command.extend(["--container-image", NEMO_RL_IMAGE])
+    else:
+        command.append("--jupyter=false")
+    command.extend(
+        [
         "--startup-script",
         f"@{startup_script}",
         "--timeout",
         "600",
-    ]
+        ]
+    )
+    return command
 
 
 def _stop_instance(state_path: Path, expected_instance: str | None = None) -> BrevCampaignState:
@@ -97,26 +140,27 @@ def _stop_instance(state_path: Path, expected_instance: str | None = None) -> Br
     if expected_instance and state.active_instance != expected_instance:
         raise RuntimeError(f"active instance is {state.active_instance}, not {expected_instance}")
 
-    instance = state.active_instance
     stopped_at = _now()
-    run_cost = active_accrued_cost(state, stopped_at)
-    subprocess.run(["brev", "stop", instance], check=True)
-    state.recorded_spend_usd = round(state.recorded_spend_usd + run_cost, 4)
-    state.history.append(
-        {
-            "instance": instance,
-            "started_at": state.active_started_at,
-            "stopped_at": stopped_at.isoformat(),
-            "hourly_rate_usd": state.active_hourly_rate_usd,
-            "cost_usd": round(run_cost, 4),
-        }
-    )
-    state.active_instance = None
-    state.active_started_at = None
-    state.active_hourly_rate_usd = None
-    state.active_deadline = None
+    subprocess.run(["brev", "stop", state.active_instance], check=True)
+    finalize_active_state(state, stopped_at, outcome="stopped")
     save_state(state_path, state)
     return state
+
+
+def _reconcile_deleted(args: argparse.Namespace) -> int:
+    state = load_state(args.state)
+    if not state.active_instance:
+        print(json.dumps(asdict(state), indent=2, sort_keys=True))
+        return 0
+    if args.instance and state.active_instance != args.instance:
+        raise SystemExit(f"active instance is {state.active_instance}, not {args.instance}")
+    listing = subprocess.run(["brev", "ls"], check=True, capture_output=True, text=True)
+    if state.active_instance in listing.stdout:
+        raise SystemExit(f"instance still appears in Brev inventory: {state.active_instance}")
+    finalize_active_state(state, _now(), outcome=args.outcome)
+    save_state(args.state, state)
+    print(json.dumps(asdict(state), indent=2, sort_keys=True))
+    return 0
 
 
 def _arm_watchdog(state_path: Path, instance: str) -> int:
@@ -157,6 +201,8 @@ def _launch(args: argparse.Namespace) -> int:
         instance_name=args.instance,
         instance_type=args.instance_type,
         startup_script=str(args.startup_script.resolve()),
+        minimum_disk_gb=args.minimum_disk_gb,
+        mode=args.mode,
     )
     preview = {"command": command, "decision": asdict(decision), "execute": args.execute}
     print(json.dumps(preview, indent=2, sort_keys=True))
@@ -215,6 +261,8 @@ def main() -> int:
     launch.add_argument("--instance", required=True)
     launch.add_argument("--instance-type", default="gpu-h200-sxm.1gpu-16vcpu-200gb")
     launch.add_argument("--hourly-rate", type=float, default=5.40)
+    launch.add_argument("--minimum-disk-gb", type=int, default=100)
+    launch.add_argument("--mode", choices=("container", "vm"), default="container")
     launch.add_argument("--hours", type=float, default=3.0)
     launch.add_argument("--startup-script", type=Path, required=True)
     launch.add_argument("--execute", action="store_true")
@@ -229,6 +277,12 @@ def main() -> int:
     stop.add_argument("--state", type=Path, required=True)
     stop.add_argument("--instance")
     stop.set_defaults(handler=lambda args: (print(json.dumps(asdict(_stop_instance(args.state, args.instance)), indent=2)), 0)[1])
+
+    reconcile = subparsers.add_parser("reconcile-deleted")
+    reconcile.add_argument("--state", type=Path, required=True)
+    reconcile.add_argument("--instance")
+    reconcile.add_argument("--outcome", default="deleted_unhealthy_build")
+    reconcile.set_defaults(handler=_reconcile_deleted)
 
     status = subparsers.add_parser("status")
     status.add_argument("--state", type=Path, required=True)

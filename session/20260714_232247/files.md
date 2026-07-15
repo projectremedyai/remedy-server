@@ -11,6 +11,7 @@
 - `tools/finetune/nemo_gym/` - one deterministic five-task resource server.
 - `tools/finetune/nemo_rl_configs/` - pinned campaign, SFT, and GRPO recipes.
 - `tools/finetune/brev_*.sh` and artifact scripts - Brev storage, setup, payload, and checksum workflow.
+- `tools/finetune/brev_vm_container_run.sh` - unexecuted VM fallback that runs the pinned NeMo RL container with heavy state under `/ephemeral`.
 - `tools/finetune/build_*.py` and evaluators - selectively recovered source builders and evaluation utilities.
 - `tests/unit/test_nemo_*.py` and `test_brev_campaign_control.py` - deterministic local contracts.
 - `docs/prds/SPEC_nemo_rl_brev_campaign.md` and `docs/index.md` - campaign runbook and documentation index.
@@ -19,3 +20,4 @@
 - `session/20260714_232247/` - durable campaign state and handoff notes.
 - `tools/finetune/generated/nemo_campaign_dataset/` - ignored, content-addressed SFT/Gym corpus and manifest.
 - `session/20260714_232247/dataset_preflight.json` - successful full-corpus acceptance report.
+- `session/20260714_232247/brev_state.json` - reconciled three-attempt cost ledger with no active instance and an estimated $2.3856 total.

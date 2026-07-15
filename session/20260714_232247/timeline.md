@@ -21,3 +21,13 @@
 - Implemented the shared deterministic verifier, single-step NeMo Gym resource server, Qwen compatibility spike, promotion evaluator, pinned SFT/GRPO recipes, single-GPU campaign planner, and Brev cost watchdog.
 - Full dataset preflight passed with 640 train documents, 139 validation documents, 137 test documents, and zero leakage or hash mismatches.
 - Paid Brev spend remains $0.
+
+## 2026-07-15 00:36:11 PDT
+- Committed the local campaign harness as `3f3f23d` and created `codex/autoresearch/remedy-vlm-20260714/baseline` at that commit.
+- Prepared a roughly 535 MB transfer payload containing the committed source plus SFT JSONL, images, and manifest; no Gym corpus was included.
+- Attempted two Crusoe A100 80GB custom-container launches and one GCP A100 80GB custom-container launch. All remained `UNHEALTHY/BUILDING` past the advertised provisioning window and never exposed a shell.
+- Deleted all three instances without transferring the payload or running a model command. Final `brev ls` reports no instances.
+- Reconciled an estimated elapsed-time cost of $2.3856: $0.0929, $0.2749, and $2.0178. Provider billing is authoritative.
+- Added guarded deletion reconciliation, a 100 GB disk floor, and an unexecuted VM-mode Docker fallback. No fourth paid attempt was started.
+- Fresh verification passed with 347 unit tests passed and one skipped, plus successful shell syntax, Python compilation, and YAML parsing checks.
+- Committed the provisioning hardening, reconciled spend ledger, and final handoff on `codex/nemo-rl-brev-five-adapter`.

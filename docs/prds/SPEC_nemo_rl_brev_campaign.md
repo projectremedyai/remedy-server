@@ -148,3 +148,31 @@ Stopping avoids compute charges but does not guarantee that capacity will be
 available again. Keep only small reproducibility records in
 `/home/ubuntu/workspace`; checkpoints, datasets, caches, logs, Ray state, and
 temporary files belong under `/ephemeral/nemo-rl`.
+
+## Provisioning Fallback
+
+On 2026-07-15, three Brev custom-container launches using the pinned NeMo RL
+image failed to expose a shell: two Crusoe A100 builds and one GCP A100 build
+remained `UNHEALTHY/BUILDING` through the providers' advertised seven-minute
+boot window. No payload or training command reached any instance.
+
+Do not repeat container-mode provisioning after this evidence. Once every
+failed instance is fully deleted, the bounded fallback is Brev VM mode with an
+explicit 100 GB disk and the same official image launched inside the VM by
+`tools/finetune/brev_vm_container_run.sh`. Brev VM mode supplies Docker and the
+NVIDIA Container Toolkit, while the wrapper keeps source under
+`/home/ubuntu/workspace` and all heavy state under `/ephemeral/nemo-rl`.
+
+Example setup after the VM exposes a shell:
+
+```bash
+brev copy --host /tmp/remedy-nemo-brev-payload-3f3f23d/remedy-server/ \
+  INSTANCE:/home/ubuntu/workspace/remedy-server/
+brev exec INSTANCE --host \
+  "cd /home/ubuntu/workspace/remedy-server && tools/finetune/brev_vm_container_run.sh bash tools/finetune/brev_setup.sh"
+```
+
+All failed instances were deleted before this handoff, and final `brev ls`
+reported no instances. The VM fallback was intentionally not launched after
+the repeated failures under the user's few-hours constraint. Never overlap
+paid instances for this campaign.

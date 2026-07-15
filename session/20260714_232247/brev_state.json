@@ -1,0 +1,33 @@
+{
+  "active_deadline": null,
+  "active_hourly_rate_usd": null,
+  "active_instance": null,
+  "active_started_at": null,
+  "history": [
+    {
+      "cost_usd": 0.0929,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-nemo-rl-20260715",
+      "outcome": "deleted_unhealthy_build",
+      "started_at": "2026-07-15T07:02:20.575077+00:00",
+      "stopped_at": "2026-07-15T07:05:09.539177+00:00"
+    },
+    {
+      "cost_usd": 0.2749,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-nemo-rl-20260715-retry",
+      "outcome": "deleted_unhealthy_build",
+      "started_at": "2026-07-15T07:06:26.246936+00:00",
+      "stopped_at": "2026-07-15T07:14:45.996828+00:00"
+    },
+    {
+      "cost_usd": 2.0178,
+      "hourly_rate_usd": 6.0504,
+      "instance": "remedy-nemo-rl-20260715-gcp",
+      "outcome": "deleted_unhealthy_build",
+      "started_at": "2026-07-15T07:15:57.788501+00:00",
+      "stopped_at": "2026-07-15T07:35:58.408434+00:00"
+    }
+  ],
+  "recorded_spend_usd": 2.3856
+}

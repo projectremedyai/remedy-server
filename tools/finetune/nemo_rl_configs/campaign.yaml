@@ -29,6 +29,12 @@ budget:
   max_instance_hours: 3.0
   max_gpu_count: 1
 brev:
+  minimum_disk_gb: 100
+  runtime_mode: container
+  vm_fallback:
+    enabled_after_container_build_failure: true
+    image: nvcr.io/nvidia/nemo-rl:v0.6.0
+    runner: tools/finetune/brev_vm_container_run.sh
   primary:
     instance_type: gpu-h200-sxm.1gpu-16vcpu-200gb
     provider: nebius
