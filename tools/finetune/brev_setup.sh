@@ -20,6 +20,8 @@ if [[ ! -d /home/ubuntu/Gym/.git ]]; then
   git clone https://github.com/NVIDIA-NeMo/Gym.git /home/ubuntu/Gym
 fi
 
+git config --global --add safe.directory /home/ubuntu/RL
+git config --global --add safe.directory /home/ubuntu/Gym
 git -C /home/ubuntu/RL checkout --detach c339070fa3bfa83a5ac58ff80d73518911e14b81
 git -C /home/ubuntu/Gym fetch --depth 1 origin 25d471edfc6db9d783b31140a4e10e6194455f71
 git -C /home/ubuntu/Gym checkout --detach 25d471edfc6db9d783b31140a4e10e6194455f71
