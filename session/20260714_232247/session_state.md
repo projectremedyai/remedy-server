@@ -4,13 +4,13 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/nemo-rl-brev-five-adapter
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-15 03:08:00 PDT
+- Updated: 2026-07-15 10:18:00 PDT
 
 ## Goal
 Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
 
 ## Current Subtask
-Close out the Brev VM provisioning run, preserve the cost/provisioning evidence, and split the next compatibility work between NeMo RL training and vLLM serving runtimes.
+Close out the first model compatibility spike under the $50 Brev credit constraint.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -38,6 +38,13 @@ Close out the Brev VM provisioning run, preserve the cost/provisioning evidence,
 - The generated SFT plus media payload is about 527 MB. It was prepared locally but never transferred. The 2.9 GB base64 Gym corpus was not transferred.
 - Integration commit `3f3f23d` and baseline branch `codex/autoresearch/remedy-vlm-20260714/baseline` preserve the verified local harness.
 - Provisioning follow-up commits on `codex/nemo-rl-brev-five-adapter` are `df57ea4`, `3295ba6`, `98f07b9`, `db4da1d`, and `f4f2f1d`.
+- Split compatibility runner commit `97251e4` added `--mode training|inference|both` so the NeMo training image and vLLM serving runtime can be tested independently.
+- A second H100 VM, `remedy-nemo-rl-compat-20260715`, ran from 2026-07-15T16:34:46Z to 2026-07-15T17:15:15Z at $4.62/hour. `brev_state.json` records $3.1170 for this window and $8.5081 total tracked campaign spend.
+- The second payload archive SHA-256 was `95143884f86935852edbed433c30b4e99790772fcfcfa636bd6df122b551cb6f`.
+- Qwen3.5-9B failed the training-side compatibility gate on single H100 80GB with CUDA OOM during image forward/backward.
+- Qwen2.5-VL-3B-Instruct passed the training-side compatibility gate: image forward/backward, PEFT save/reload identity, 29,933,568 trainable LoRA parameters, and 0 visual-tower trainable parameters.
+- A separate `vllm/vllm-openai:v0.25.1` runtime was attempted for Qwen2.5-VL-3B serving. The vLLM image pulled successfully, but `docker run -d` for the OpenAI server stuck before visible container creation with only about 16 GB root disk free. Treat this as a serving-runtime feasibility blocker, not a model failure.
+- Remote reports could not be copied after the stop because SSH reset during shutdown. The captured JSON output is summarized in `session/20260714_232247/compatibility_results_20260715.md`.
 - Fresh final verification passed: 347 unit tests passed, one skipped; shell syntax, Python compilation, and all campaign YAML files also passed.
 
 ## Plan
@@ -48,12 +55,14 @@ Close out the Brev VM provisioning run, preserve the cost/provisioning evidence,
 - [x] Authenticate Brev and inspect live prices.
 - [x] Attempt bounded single-GPU custom-container provisioning with an automatic watchdog; delete every failed build and reconcile the local cost ledger.
 - [x] Prove Brev VM mode with the official NeMo RL container after a tiny custom-container preflight failure.
+- [x] Run target/control training-side compatibility under the split runtime plan.
+- [ ] Re-run the serving-side vLLM gate on a fresh/larger serving-only runtime.
 - [x] Run a fresh full local verification.
 - [x] Commit the provisioning hardening and final handoff.
 
 ## Assumptions
 - Five adapters means five separate language-backbone LoRAs and no consolidated multitask adapter.
-- Qwen3.5-9B is primary unless the compatibility and control-model gates select Qwen2.5-VL-3B.
+- Qwen3.5-9B is primary unless the compatibility and control-model gates select Qwen2.5-VL-3B. Current measured evidence selects Qwen2.5-VL-3B for the next low-cost training-side work unless Qwen3.5 is revisited with a different memory strategy.
 - Zero false positives on frozen real pass pages is a hard promotion constraint.
 - Existing Qwen3-VL-32B routing remains the production rollback until every promotion gate passes.
 - Under the revised credit constraint, compatibility, frozen baselines, and SFT evidence take priority; unfinished GRPO is reported as budget-limited rather than exceeding the ceiling.
@@ -62,4 +71,4 @@ Close out the Brev VM provisioning run, preserve the cost/provisioning evidence,
 - Brev custom-container mode is rejected for this campaign. It failed across earlier full attempts, and the tiny NVIDIA container preflight showed the host/GPU became available while the requested custom container never started.
 - The official NeMo RL training container does not include PEFT or vLLM by default. PEFT can be installed, but current vLLM installation attempts replace the NeMo-pinned Torch/Transformers stack and conflict with `nemo-rl==0.6.0`.
 - Do not install vLLM into the NeMo RL training image for the next spike. Treat training and serving as separate runtimes or build explicit derived images.
-- The H100 VM is stopped, not deleted. Re-check `brev ls` before any paid restart and delete the instance if storage cost becomes a concern.
+- The second H100 VM stop showed Brev status lag: guarded stop recorded success, direct stop then reported the backend state was already `stopped`, while `brev ls` displayed `STOPPING`. Re-check `brev ls` before any paid restart and delete stopped instances if storage cost becomes a concern.

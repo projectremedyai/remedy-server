@@ -51,3 +51,13 @@
 - Stopped the H100 VM through the budget controller. `brev_state.json` records the VM run as stopped with $3.0055 cost and $5.3911 tracked campaign spend.
 - A follow-up `brev stop remedy-nemo-rl-vm-20260715` returned an internal Brev status-transition error saying the environment was already `stopped`, while `brev ls` briefly continued to display `STOPPING`. The listing later converged to `STOPPED`. Re-check `brev ls` before any restart or delete the instance if storage charges/capacity risk outweigh retaining it.
 - Measured the next blocker: vLLM should not be installed into the official NeMo RL training container because current vLLM installation attempts replace NeMo-pinned Torch and Transformers versions. Next compatibility work should split NeMo RL training from vLLM serving.
+
+## 2026-07-15 09:34:46 PDT
+- Launched fresh H100 VM `remedy-nemo-rl-compat-20260715` for a 1.5-hour compatibility window. Projected run cost was $6.93 and projected total was $12.3211, below the $40 no-new-work threshold.
+- Added and committed `97251e4`, which lets `tools.finetune.remedy_nemo_rl.compatibility` run `--mode training`, `--mode inference`, or `--mode both`.
+- Packaged and uploaded a 477 MB payload archive with SHA-256 `95143884f86935852edbed433c30b4e99790772fcfcfa636bd6df122b551cb6f`.
+- Official NeMo RL container setup succeeded again with `nemo_rl_and_gym_import_ok`.
+- Qwen3.5-9B failed the NeMo training-side compatibility gate with CUDA OOM during image forward/backward on a single H100 80GB.
+- Qwen2.5-VL-3B-Instruct passed the NeMo training-side gate with image forward/backward, PEFT save/reload identity, 29,933,568 trainable LoRA parameters, and 0 visual-tower trainables.
+- Pulled separate `vllm/vllm-openai:v0.25.1` image. Serving server start for Qwen2.5-VL-3B blocked because `docker run -d` stuck before visible container creation when root disk had about 16 GB free.
+- Stopped the VM to protect budget. `brev_state.json` records $3.1170 for this window and $8.5081 total tracked campaign spend. Brev status lagged at `STOPPING` after the backend reported the instance was already `stopped`.
