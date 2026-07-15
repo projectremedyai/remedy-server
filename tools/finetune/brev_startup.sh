@@ -3,6 +3,7 @@ set -euo pipefail
 
 mkdir -p \
   /home/ubuntu/workspace \
+  /ephemeral \
   /ephemeral/nemo-rl/checkpoints \
   /ephemeral/nemo-rl/datasets \
   /ephemeral/nemo-rl/logs \

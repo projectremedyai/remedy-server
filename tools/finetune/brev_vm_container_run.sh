@@ -4,10 +4,15 @@ set -euo pipefail
 image=nvcr.io/nvidia/nemo-rl:v0.6.0
 workspace=/home/ubuntu/workspace
 runtime_home=/home/ubuntu/nemo-runtime
+docker_cmd=(docker)
 
 mkdir -p "$workspace" "$runtime_home" /ephemeral/nemo-rl
 
-exec docker run --rm \
+if ! docker info >/dev/null 2>&1; then
+  docker_cmd=(sudo docker)
+fi
+
+exec "${docker_cmd[@]}" run --rm \
   --gpus all \
   --ipc=host \
   --network=host \
