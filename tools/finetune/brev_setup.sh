@@ -6,7 +6,11 @@ export HUGGINGFACE_HUB_CACHE=/ephemeral/nemo-rl/cache/huggingface/hub
 export TORCH_HOME=/ephemeral/nemo-rl/cache/torch
 export RAY_TMPDIR=/ephemeral/nemo-rl/ray
 export TMPDIR=/ephemeral/nemo-rl/tmp
-python_bin=$(command -v python3 || command -v python)
+if [[ -x /opt/nemo_rl_venv/bin/python ]]; then
+  python_bin=/opt/nemo_rl_venv/bin/python
+else
+  python_bin=$(command -v python3 || command -v python)
+fi
 
 if [[ ! -d /home/ubuntu/RL/.git ]]; then
   git clone --branch r0.6.0 --depth 1 https://github.com/NVIDIA-NeMo/RL.git /home/ubuntu/RL
