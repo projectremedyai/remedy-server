@@ -27,7 +27,15 @@
       "outcome": "deleted_unhealthy_build",
       "started_at": "2026-07-15T07:15:57.788501+00:00",
       "stopped_at": "2026-07-15T07:35:58.408434+00:00"
+    },
+    {
+      "cost_usd": 3.0055,
+      "hourly_rate_usd": 4.62,
+      "instance": "remedy-nemo-rl-vm-20260715",
+      "outcome": "stopped",
+      "started_at": "2026-07-15T09:15:35.255958+00:00",
+      "stopped_at": "2026-07-15T09:54:37.201520+00:00"
     }
   ],
-  "recorded_spend_usd": 2.3856
+  "recorded_spend_usd": 5.3911
 }

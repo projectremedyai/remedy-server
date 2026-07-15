@@ -31,3 +31,23 @@
 - Added guarded deletion reconciliation, a 100 GB disk floor, and an unexecuted VM-mode Docker fallback. No fourth paid attempt was started.
 - Fresh verification passed with 347 unit tests passed and one skipped, plus successful shell syntax, Python compilation, and YAML parsing checks.
 - Committed the provisioning hardening, reconciled spend ledger, and final handoff on `codex/nemo-rl-brev-five-adapter`.
+
+## 2026-07-15 02:11:00 PDT
+- Re-read the user plan from `/Users/laccd/Downloads/Five-Adapter NeMo RL Campaign on NVIDIA Brev.md`; the campaign remains the five-adapter NeMo RL on Brev plan, with the user's later $50/few-hours constraint overriding the original $100 ceiling.
+- Tested Brev custom-container mode first with tiny known-good `nvcr.io/nvidia/cuda:12.4.1-base-ubuntu22.04` on an A100 80GB instance.
+- Inspected the Brev CLI surface before launching the large NeMo image: `brev create` supports `--container-image`, `--startup-script`, and `--mode`, but exposes no custom container entrypoint/command override; `brev exec --host` can bypass the container and run on the VM host.
+- The tiny preflight host came up with an A100 visible through `nvidia-smi`, but the custom container never existed, Docker had no images or containers, and the startup marker files were absent. The instance was deleted. This rejected Brev custom-container mode without pulling the 18.73+ GB NeMo image.
+
+## 2026-07-15 02:15:35 PDT
+- Switched to Brev VM mode after the tiny custom-container failure.
+- Launched `remedy-nemo-rl-vm-20260715` as a stoppable `gpu-h100-sxm.1gpu-16vcpu-200gb` VM at $4.62/hour with a three-hour watchdog.
+- Verified the host exposed an H100 80GB GPU. Nebius did not provide a mounted `/ephemeral`, so the setup scripts now create `/ephemeral` on the root disk when needed.
+- Transferred a 477 MB payload archive with SHA-256 `cb30edf480cb845b10da139d33495c57b45379c71fb952141b1e8862695cf9ae`, verified the checksum remotely, and extracted it under `/home/ubuntu/workspace`.
+- Pulled and ran official `nvcr.io/nvidia/nemo-rl:v0.6.0`; image digest resolved to `sha256:336aa41391a99e01d018d17d327107fd6d1023ad4b2812c8d8c913dee95fd3f2`.
+- Fixed VM/container setup issues in commits `df57ea4`, `3295ba6`, `98f07b9`, `db4da1d`, and `f4f2f1d`.
+- Completed pinned setup inside the official image with NeMo RL `c339070fa3bfa83a5ac58ff80d73518911e14b81`, NeMo Gym `25d471edfc6db9d783b31140a4e10e6194455f71`, and final `nemo_rl_and_gym_import_ok`.
+
+## 2026-07-15 02:54:37 PDT
+- Stopped the H100 VM through the budget controller. `brev_state.json` records the VM run as stopped with $3.0055 cost and $5.3911 tracked campaign spend.
+- A follow-up `brev stop remedy-nemo-rl-vm-20260715` returned an internal Brev status-transition error saying the environment was already `stopped`, while `brev ls` briefly continued to display `STOPPING`. The listing later converged to `STOPPED`. Re-check `brev ls` before any restart or delete the instance if storage charges/capacity risk outweigh retaining it.
+- Measured the next blocker: vLLM should not be installed into the official NeMo RL training container because current vLLM installation attempts replace NeMo-pinned Torch and Transformers versions. Next compatibility work should split NeMo RL training from vLLM serving.
