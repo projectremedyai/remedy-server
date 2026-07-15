@@ -1,0 +1,52 @@
+container: nvcr.io/nvidia/nemo-rl:v0.6.0
+nemo_rl:
+  repository: https://github.com/NVIDIA-NeMo/RL.git
+  revision: r0.6.0
+  commit: c339070fa3bfa83a5ac58ff80d73518911e14b81
+nemo_gym:
+  repository: https://github.com/NVIDIA-NeMo/Gym.git
+  commit: 25d471edfc6db9d783b31140a4e10e6194455f71
+models:
+  target: Qwen/Qwen3.5-9B
+  control: Qwen/Qwen2.5-VL-3B-Instruct
+  rollback: Qwen/Qwen3-VL-32B-Instruct
+tasks:
+  - alt_text_quality
+  - table_structure
+  - contrast
+  - reading_order
+  - heading_hierarchy
+grpo_order:
+  - heading_hierarchy
+  - contrast
+  - table_structure
+  - reading_order
+  - alt_text_quality
+budget:
+  hard_limit_usd: 50.0
+  no_new_work_usd: 40.0
+  reserve_usd: 10.0
+  max_instance_hours: 3.0
+  max_gpu_count: 1
+brev:
+  primary:
+    instance_type: gpu-h200-sxm.1gpu-16vcpu-200gb
+    provider: nebius
+    gpu_count: 1
+    vram_gb: 141
+    observed_hourly_rate_usd: 5.40
+  control_fallback:
+    instance_type: gpu-h100-sxm.1gpu-16vcpu-200gb
+    provider: nebius
+    gpu_count: 1
+    vram_gb: 80
+    observed_hourly_rate_usd: 4.62
+  multi_gpu_escalation: false
+storage:
+  source_root: /home/ubuntu/workspace
+  artifact_root: /ephemeral/nemo-rl
+  checkpoint_root: /ephemeral/nemo-rl/checkpoints
+  dataset_root: /ephemeral/nemo-rl/datasets
+  log_root: /ephemeral/nemo-rl/logs
+  cache_root: /ephemeral/nemo-rl/cache
+  ray_root: /ephemeral/nemo-rl/ray

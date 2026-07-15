@@ -144,3 +144,24 @@ graphify-out/
 tests/*
 !tests/unit/
 !tests/unit/*.py
+
+# NeMo RL campaign source and recipes. Generated corpora remain ignored.
+!tools/finetune/
+tools/finetune/*
+!tools/finetune/*.py
+!tools/finetune/*.sh
+!tools/finetune/nemo_gym/
+!tools/finetune/nemo_gym/**
+!tools/finetune/nemo_rl_configs/
+!tools/finetune/nemo_rl_configs/**
+!tools/finetune/remedy_nemo_rl/
+!tools/finetune/remedy_nemo_rl/**
+tools/finetune/**/__pycache__/
+tools/finetune/**/*.pyc
+
+# NeMo RL campaign documentation and session ledger.
+!docs/index.md
+!docs/prds/SPEC_nemo_rl_brev_campaign.md
+!session/
+!session/**/*.md
+!session/**/*.tsv

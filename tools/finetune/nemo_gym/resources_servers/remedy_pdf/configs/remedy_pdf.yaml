@@ -1,0 +1,26 @@
+remedy_pdf:
+  resources_servers:
+    remedy_pdf:
+      entrypoint: app.py
+      domain: other
+      description: Deterministic verifier for five Remedy PDF accessibility tasks
+      value: Improve safe structured PDF accessibility judgments
+      verified: false
+remedy_pdf_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      resources_server:
+        type: resources_servers
+        name: remedy_pdf
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      datasets:
+        - name: train
+          type: train
+          jsonl_fpath: /ephemeral/nemo-rl/datasets/gym/train.jsonl
+        - name: validation
+          type: validation
+          jsonl_fpath: /ephemeral/nemo-rl/datasets/gym/validation.jsonl

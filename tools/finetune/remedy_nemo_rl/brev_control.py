@@ -1,0 +1,242 @@
+"""Guarded NVIDIA Brev lifecycle and cost accounting for the $50 campaign."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from .budget import BudgetPolicy, authorize_launch
+
+
+NEMO_RL_IMAGE = "nvcr.io/nvidia/nemo-rl:v0.6.0"
+
+
+@dataclass
+class BrevCampaignState:
+    """Durable spend and active-instance state used by the watchdog."""
+
+    recorded_spend_usd: float = 0.0
+    active_instance: str | None = None
+    active_started_at: str | None = None
+    active_hourly_rate_usd: float | None = None
+    active_deadline: str | None = None
+    history: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def load_state(path: Path) -> BrevCampaignState:
+    """Load campaign state, returning a zero-spend state when absent."""
+
+    if not path.exists():
+        return BrevCampaignState()
+    return BrevCampaignState(**json.loads(path.read_text(encoding="utf-8")))
+
+
+def save_state(path: Path, state: BrevCampaignState) -> None:
+    """Atomically persist campaign state."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(asdict(state), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def active_accrued_cost(state: BrevCampaignState, now: datetime | None = None) -> float:
+    """Calculate unrecorded active compute cost from real elapsed wall time."""
+
+    if not state.active_instance or not state.active_started_at or state.active_hourly_rate_usd is None:
+        return 0.0
+    elapsed = max(0.0, ((now or _now()) - _parse_time(state.active_started_at)).total_seconds())
+    return elapsed / 3600.0 * state.active_hourly_rate_usd
+
+
+def build_create_command(
+    *,
+    instance_name: str,
+    instance_type: str,
+    startup_script: str,
+) -> list[str]:
+    """Build the exact pinned, stoppable, single-container Brev create command."""
+
+    return [
+        "brev",
+        "create",
+        instance_name,
+        "--type",
+        instance_type,
+        "--stoppable",
+        "--mode",
+        "container",
+        "--container-image",
+        NEMO_RL_IMAGE,
+        "--startup-script",
+        f"@{startup_script}",
+        "--timeout",
+        "600",
+    ]
+
+
+def _stop_instance(state_path: Path, expected_instance: str | None = None) -> BrevCampaignState:
+    state = load_state(state_path)
+    if not state.active_instance:
+        return state
+    if expected_instance and state.active_instance != expected_instance:
+        raise RuntimeError(f"active instance is {state.active_instance}, not {expected_instance}")
+
+    instance = state.active_instance
+    stopped_at = _now()
+    run_cost = active_accrued_cost(state, stopped_at)
+    subprocess.run(["brev", "stop", instance], check=True)
+    state.recorded_spend_usd = round(state.recorded_spend_usd + run_cost, 4)
+    state.history.append(
+        {
+            "instance": instance,
+            "started_at": state.active_started_at,
+            "stopped_at": stopped_at.isoformat(),
+            "hourly_rate_usd": state.active_hourly_rate_usd,
+            "cost_usd": round(run_cost, 4),
+        }
+    )
+    state.active_instance = None
+    state.active_started_at = None
+    state.active_hourly_rate_usd = None
+    state.active_deadline = None
+    save_state(state_path, state)
+    return state
+
+
+def _arm_watchdog(state_path: Path, instance: str) -> int:
+    log_path = state_path.with_suffix(".watchdog.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_stream = log_path.open("ab")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tools.finetune.remedy_nemo_rl.brev_control",
+            "watch",
+            "--state",
+            str(state_path),
+            "--instance",
+            instance,
+        ],
+        stdout=log_stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    log_stream.close()
+    return process.pid
+
+
+def _launch(args: argparse.Namespace) -> int:
+    state = load_state(args.state)
+    if state.active_instance:
+        raise SystemExit(f"campaign already has active instance {state.active_instance}")
+    decision = authorize_launch(
+        policy=BudgetPolicy(),
+        recorded_spend_usd=state.recorded_spend_usd,
+        hourly_rate_usd=args.hourly_rate,
+        requested_hours=args.hours,
+        gpu_count=1,
+    )
+    command = build_create_command(
+        instance_name=args.instance,
+        instance_type=args.instance_type,
+        startup_script=str(args.startup_script.resolve()),
+    )
+    preview = {"command": command, "decision": asdict(decision), "execute": args.execute}
+    print(json.dumps(preview, indent=2, sort_keys=True))
+    if not args.execute:
+        return 0
+    if not args.startup_script.is_file():
+        raise SystemExit(f"startup script does not exist: {args.startup_script}")
+
+    subprocess.run(command, check=True)
+    started_at = _now()
+    state.active_instance = args.instance
+    state.active_started_at = started_at.isoformat()
+    state.active_hourly_rate_usd = args.hourly_rate
+    state.active_deadline = (started_at + timedelta(hours=args.hours)).isoformat()
+    save_state(args.state, state)
+    watchdog_pid = _arm_watchdog(args.state, args.instance)
+    print(json.dumps({"instance": args.instance, "deadline": state.active_deadline, "watchdog_pid": watchdog_pid}))
+    return 0
+
+
+def _watch(args: argparse.Namespace) -> int:
+    policy = BudgetPolicy()
+    while True:
+        state = load_state(args.state)
+        if state.active_instance != args.instance:
+            return 0
+        now = _now()
+        total = state.recorded_spend_usd + active_accrued_cost(state, now)
+        deadline = _parse_time(state.active_deadline) if state.active_deadline else now
+        if now >= deadline or total >= policy.hard_limit_usd:
+            _stop_instance(args.state, args.instance)
+            return 0
+        time.sleep(30)
+
+
+def _status(args: argparse.Namespace) -> int:
+    state = load_state(args.state)
+    accrued = active_accrued_cost(state)
+    payload = {
+        **asdict(state),
+        "active_accrued_cost_usd": round(accrued, 4),
+        "estimated_total_spend_usd": round(state.recorded_spend_usd + accrued, 4),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def main() -> int:
+    """Run guarded launch, watchdog, stop, or status operations."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    launch = subparsers.add_parser("launch")
+    launch.add_argument("--state", type=Path, required=True)
+    launch.add_argument("--instance", required=True)
+    launch.add_argument("--instance-type", default="gpu-h200-sxm.1gpu-16vcpu-200gb")
+    launch.add_argument("--hourly-rate", type=float, default=5.40)
+    launch.add_argument("--hours", type=float, default=3.0)
+    launch.add_argument("--startup-script", type=Path, required=True)
+    launch.add_argument("--execute", action="store_true")
+    launch.set_defaults(handler=_launch)
+
+    watch = subparsers.add_parser("watch")
+    watch.add_argument("--state", type=Path, required=True)
+    watch.add_argument("--instance", required=True)
+    watch.set_defaults(handler=_watch)
+
+    stop = subparsers.add_parser("stop")
+    stop.add_argument("--state", type=Path, required=True)
+    stop.add_argument("--instance")
+    stop.set_defaults(handler=lambda args: (print(json.dumps(asdict(_stop_instance(args.state, args.instance)), indent=2)), 0)[1])
+
+    status = subparsers.add_parser("status")
+    status.add_argument("--state", type=Path, required=True)
+    status.set_defaults(handler=_status)
+
+    args = parser.parse_args()
+    return int(args.handler(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

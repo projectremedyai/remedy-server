@@ -1,0 +1,86 @@
+defaults: ../sft_vlm_3B.yaml
+
+sft:
+  max_num_epochs: 2
+  max_num_steps: 1000000
+  val_period: 20
+  val_at_start: true
+  val_at_end: true
+  seed: 20260714
+
+checkpointing:
+  checkpoint_dir: ${oc.env:REMEDY_CHECKPOINT_DIR,/ephemeral/nemo-rl/checkpoints/sft}
+  keep_top_k: 1
+  save_period: 20
+  checkpoint_must_save_by: "00:02:45:00"
+
+policy:
+  model_name: Qwen/Qwen2.5-VL-3B-Instruct
+  tokenizer:
+    name: ${policy.model_name}
+  train_global_batch_size: 8
+  train_micro_batch_size: 1
+  max_total_sequence_length: 4096
+  precision: bfloat16
+  dtensor_cfg:
+    _v2: true
+    enabled: true
+    activation_checkpointing: true
+    tensor_parallel_size: 1
+    context_parallel_size: 1
+    automodel_kwargs:
+      force_hf: true
+    lora_cfg:
+      enabled: true
+      target_modules: []
+      exclude_modules: [visual, vision_tower, vision_model, multi_modal_projector]
+      match_all_linear: true
+      dim: 16
+      alpha: 32
+      dropout: 0.0
+      dropout_position: post
+      lora_A_init: xavier
+      use_triton: true
+  optimizer:
+    name: torch.optim.AdamW
+    kwargs:
+      lr: 2.0e-5
+      weight_decay: 0.01
+      betas: [0.9, 0.98]
+      eps: 1.0e-8
+      foreach: false
+      fused: false
+  scheduler:
+    - name: torch.optim.lr_scheduler.LinearLR
+      kwargs:
+        start_factor: 0.1
+        end_factor: 1.0
+        total_iters: 1
+    - name: torch.optim.lr_scheduler.ConstantLR
+      kwargs:
+        factor: 1.0
+        total_iters: 1000000000
+    - milestones: [1]
+
+data:
+  train:
+    dataset_name: openai_format
+    data_path: ${oc.env:REMEDY_SFT_TRAIN}
+  validation:
+    dataset_name: openai_format
+    data_path: ${oc.env:REMEDY_SFT_VALIDATION}
+  default:
+    dataset_name: openai_format
+    prompt_file: null
+    system_prompt_file: null
+    processor: sft_processor
+
+logger:
+  log_dir: ${oc.env:REMEDY_LOG_DIR,/ephemeral/nemo-rl/logs/sft}
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true
+
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1

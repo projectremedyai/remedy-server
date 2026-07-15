@@ -1,0 +1,2 @@
+index	branch	parent_commit	commit	recipe	metric_name	metric_value	memory_gb	elapsed_min	launcher	job_id	command	log_path	status	description	hourly_rate_usd	cost_usd	cumulative_cost_usd
+0	codex/nemo-rl-brev-five-adapter	24f94a0	HEAD	local-harness	pytest_passed	345	n/a	0.30	local	local-preflight	uv run pytest -q tests/unit	session/20260714_232247/dataset_preflight.json	keep	Local harness and full dataset preflight passed	0.00	0.00	0.00

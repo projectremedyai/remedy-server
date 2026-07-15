@@ -1,0 +1,110 @@
+defaults: ../vlm_grpo_3B.yaml
+
+grpo:
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  max_rollout_turns: 1
+  max_num_epochs: 100
+  max_num_steps: 20
+  val_period: 5
+  val_at_start: true
+  val_at_end: true
+  max_val_samples: null
+  seed: 20260714
+
+checkpointing:
+  checkpoint_dir: ${oc.env:REMEDY_CHECKPOINT_DIR,/ephemeral/nemo-rl/checkpoints/grpo}
+  keep_top_k: 1
+  save_period: 5
+  checkpoint_must_save_by: "00:02:45:00"
+
+policy:
+  model_name: ${oc.env:REMEDY_GRPO_MODEL,Qwen/Qwen3.5-9B}
+  tokenizer:
+    name: ${policy.model_name}
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 4096
+  precision: bfloat16
+  dtensor_cfg:
+    _v2: true
+    enabled: true
+    activation_checkpointing: true
+    tensor_parallel_size: 1
+    context_parallel_size: 1
+    automodel_kwargs:
+      force_hf: true
+    lora_cfg:
+      enabled: true
+      target_modules: []
+      exclude_modules: [visual, vision_tower, vision_model, multi_modal_projector]
+      match_all_linear: true
+      dim: 16
+      alpha: 32
+      dropout: 0.0
+      dropout_position: post
+      lora_A_init: xavier
+      use_triton: true
+  optimizer:
+    name: torch.optim.AdamW
+    kwargs:
+      lr: 1.0e-6
+      weight_decay: 0.01
+      betas: [0.9, 0.999]
+      eps: 1.0e-8
+      foreach: false
+      fused: false
+  generation:
+    backend: vllm
+    max_new_tokens: 512
+    temperature: 0.7
+    top_p: 0.95
+    top_k: null
+    stop_token_ids: null
+    stop_strings: null
+    vllm_cfg:
+      async_engine: true
+      expose_http_server: true
+      tensor_parallel_size: 1
+      max_model_len: 4096
+      gpu_memory_utilization: 0.55
+      skip_tokenizer_init: false
+    vllm_kwargs:
+      mm_processor_cache_gb: 0
+    colocated:
+      enabled: true
+
+data:
+  max_input_seq_length: null
+  shuffle: false
+  num_workers: 1
+  train:
+    dataset_name: NemoGymDataset
+    data_path: ${oc.env:REMEDY_GYM_TRAIN}
+  validation:
+    dataset_name: NemoGymDataset
+    data_path: ${oc.env:REMEDY_GYM_VALIDATION}
+  default:
+    dataset_name: NemoGymDataset
+    env_name: nemo_gym
+    prompt_file: null
+    system_prompt_file: null
+    processor: nemo_gym_data_processor
+
+env:
+  should_use_nemo_gym: true
+  nemo_gym:
+    config_paths:
+      - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+      - resources_servers/remedy_pdf/configs/remedy_pdf.yaml
+
+logger:
+  log_dir: ${oc.env:REMEDY_LOG_DIR,/ephemeral/nemo-rl/logs/grpo}
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true
+
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1
