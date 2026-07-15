@@ -6,6 +6,7 @@ export HUGGINGFACE_HUB_CACHE=/ephemeral/nemo-rl/cache/huggingface/hub
 export TORCH_HOME=/ephemeral/nemo-rl/cache/torch
 export RAY_TMPDIR=/ephemeral/nemo-rl/ray
 export TMPDIR=/ephemeral/nemo-rl/tmp
+python_bin=$(command -v python3 || command -v python)
 
 if [[ ! -d /home/ubuntu/RL/.git ]]; then
   git clone --branch r0.6.0 --depth 1 https://github.com/NVIDIA-NeMo/RL.git /home/ubuntu/RL
@@ -18,7 +19,7 @@ fi
 git -C /home/ubuntu/RL checkout --detach c339070fa3bfa83a5ac58ff80d73518911e14b81
 git -C /home/ubuntu/Gym fetch --depth 1 origin 25d471edfc6db9d783b31140a4e10e6194455f71
 git -C /home/ubuntu/Gym checkout --detach 25d471edfc6db9d783b31140a4e10e6194455f71
-python -m pip install --no-deps -e /home/ubuntu/Gym
+"$python_bin" -m pip install --no-deps -e /home/ubuntu/Gym
 
 mkdir -p /home/ubuntu/Gym/resources_servers/remedy_pdf
 cp -R \
@@ -32,4 +33,4 @@ cp \
 
 test "$(git -C /home/ubuntu/RL rev-parse HEAD)" = c339070fa3bfa83a5ac58ff80d73518911e14b81
 test "$(git -C /home/ubuntu/Gym rev-parse HEAD)" = 25d471edfc6db9d783b31140a4e10e6194455f71
-PYTHONPATH=/home/ubuntu/workspace/remedy-server python -c 'import nemo_rl, nemo_gym; print("nemo_rl_and_gym_import_ok")'
+PYTHONPATH=/home/ubuntu/workspace/remedy-server "$python_bin" -c 'import nemo_rl, nemo_gym; print("nemo_rl_and_gym_import_ok")'
