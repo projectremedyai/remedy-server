@@ -223,6 +223,37 @@ def _launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _start_existing(args: argparse.Namespace) -> int:
+    """Start a stopped Brev instance and arm the campaign watchdog."""
+
+    state = load_state(args.state)
+    if state.active_instance:
+        raise SystemExit(f"campaign already has active instance {state.active_instance}")
+    decision = authorize_launch(
+        policy=BudgetPolicy(),
+        recorded_spend_usd=state.recorded_spend_usd,
+        hourly_rate_usd=args.hourly_rate,
+        requested_hours=args.hours,
+        gpu_count=1,
+    )
+    command = ["brev", "start", args.instance]
+    preview = {"command": command, "decision": asdict(decision), "execute": args.execute}
+    print(json.dumps(preview, indent=2, sort_keys=True))
+    if not args.execute:
+        return 0
+
+    subprocess.run(command, check=True)
+    started_at = _now()
+    state.active_instance = args.instance
+    state.active_started_at = started_at.isoformat()
+    state.active_hourly_rate_usd = args.hourly_rate
+    state.active_deadline = (started_at + timedelta(hours=args.hours)).isoformat()
+    save_state(args.state, state)
+    watchdog_pid = _arm_watchdog(args.state, args.instance)
+    print(json.dumps({"instance": args.instance, "deadline": state.active_deadline, "watchdog_pid": watchdog_pid}))
+    return 0
+
+
 def _watch(args: argparse.Namespace) -> int:
     policy = BudgetPolicy()
     while True:
@@ -267,6 +298,14 @@ def main() -> int:
     launch.add_argument("--startup-script", type=Path, required=True)
     launch.add_argument("--execute", action="store_true")
     launch.set_defaults(handler=_launch)
+
+    start_existing = subparsers.add_parser("start-existing")
+    start_existing.add_argument("--state", type=Path, required=True)
+    start_existing.add_argument("--instance", required=True)
+    start_existing.add_argument("--hourly-rate", type=float, required=True)
+    start_existing.add_argument("--hours", type=float, default=1.0)
+    start_existing.add_argument("--execute", action="store_true")
+    start_existing.set_defaults(handler=_start_existing)
 
     watch = subparsers.add_parser("watch")
     watch.add_argument("--state", type=Path, required=True)
