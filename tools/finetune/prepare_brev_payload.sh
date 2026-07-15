@@ -14,8 +14,8 @@ test ! -e "$payload_repo" || { echo "payload destination already exists: $payloa
 mkdir -p "$payload_repo/tools/finetune/generated/nemo_campaign_dataset"
 git -C "$repo_root" archive HEAD | tar -xf - -C "$payload_repo"
 
-rsync -a "$dataset_root/sft/" "$payload_repo/tools/finetune/generated/nemo_campaign_dataset/sft/"
-rsync -a "$dataset_root/media/" "$payload_repo/tools/finetune/generated/nemo_campaign_dataset/media/"
+rsync -a --exclude '._*' "$dataset_root/sft/" "$payload_repo/tools/finetune/generated/nemo_campaign_dataset/sft/"
+rsync -a --exclude '._*' "$dataset_root/media/" "$payload_repo/tools/finetune/generated/nemo_campaign_dataset/media/"
 cp "$dataset_root/manifest.json" "$payload_repo/tools/finetune/generated/nemo_campaign_dataset/manifest.json"
 
 du -sh "$payload_root"

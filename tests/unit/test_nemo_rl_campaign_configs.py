@@ -55,7 +55,17 @@ def test_sft_recipes_have_identical_five_adapter_hyperparameters() -> None:
         assert lora["dim"] == 16
         assert lora["alpha"] == 32
         assert lora["dropout"] == 0.0
-        assert {"visual", "vision_tower", "vision_model"} <= set(lora["exclude_modules"])
+        assert set(lora["target_modules"]) == {
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        }
+        assert lora["exclude_modules"] == []
+        assert lora["match_all_linear"] is False
         assert recipe["policy"]["dtensor_cfg"]["activation_checkpointing"] is True
         assert recipe["data"]["default"]["dataset_name"] == "openai_format"
         assert recipe["data"]["train"]["dataset_name"] == "openai_format"

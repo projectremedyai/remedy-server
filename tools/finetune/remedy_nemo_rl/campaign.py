@@ -48,10 +48,6 @@ def build_sft_command(
     task_root = dataset_root / "sft" / task
     warmup = warmup_steps(train_count)
     command = [
-        "uv",
-        "run",
-        "--project",
-        "/home/ubuntu/RL",
         "python",
         "/home/ubuntu/RL/examples/run_vlm_sft.py",
         "--config",

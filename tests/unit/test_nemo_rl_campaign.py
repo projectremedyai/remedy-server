@@ -20,13 +20,7 @@ def test_sft_command_is_single_gpu_and_uses_task_specific_paths() -> None:
         train_count=114,
     )
 
-    assert command[:5] == [
-        "uv",
-        "run",
-        "--project",
-        "/home/ubuntu/RL",
-        "python",
-    ]
+    assert command[:2] == ["python", "/home/ubuntu/RL/examples/run_vlm_sft.py"]
     assert "cluster.gpus_per_node=1" in command
     assert "policy.scheduler.0.kwargs.total_iters=2" in command
     assert environment["REMEDY_SFT_TRAIN"].endswith("/sft/contrast/train.jsonl")
