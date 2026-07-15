@@ -1,0 +1,12 @@
+{
+  "base_url": "http://127.0.0.1:8000/v1",
+  "error": "Expecting value: line 1 column 1 (char 0)",
+  "error_type": "JSONDecodeError",
+  "image": "page.png",
+  "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "one_image_chat_completions": true,
+  "raw_content": "```json\n{\n  \"status\": \"pass\",\n  \"findings\": []\n}\n```",
+  "server_ready": true,
+  "technical_pass": false,
+  "zero_shot_json_valid": false
+}

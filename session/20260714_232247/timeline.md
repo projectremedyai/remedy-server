@@ -61,3 +61,21 @@
 - Qwen2.5-VL-3B-Instruct passed the NeMo training-side gate with image forward/backward, PEFT save/reload identity, 29,933,568 trainable LoRA parameters, and 0 visual-tower trainables.
 - Pulled separate `vllm/vllm-openai:v0.25.1` image. Serving server start for Qwen2.5-VL-3B blocked because `docker run -d` stuck before visible container creation when root disk had about 16 GB free.
 - Stopped the VM to protect budget. `brev_state.json` records $3.1170 for this window and $8.5081 total tracked campaign spend. Brev status lagged at `STOPPING` after the backend reported the instance was already `stopped`.
+
+## 2026-07-15 11:16:33 PDT
+- User provided the authoritative NVIDIA Billing dashboard state: total cost $7.28 and current balance $45.94. This overrides the local elapsed-time ledger for actual provider billing.
+- User directed the campaign to proceed with Qwen2.5-VL-3B for the low-cost training path, redo vLLM serving on a fresh serving-only VM or larger disk, and avoid more Qwen3.5 spend unless intentionally testing a different memory strategy.
+
+## 2026-07-15 11:20:41 PDT
+- Created branch `codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving` from `573fd0a`.
+- Added reusable OpenAI-compatible one-image serving probe in commit `8c95465`.
+- Launched serving-only Brev VM `remedy-qwen25-vllm-serving-20260715` on `a100-80gb.1x` at $1.98/hour with 128 GB disk and a 1.25-hour watchdog.
+- Uploaded the 119 KB probe bundle with SHA-256 `ab14067de81a38f037fc85a3a9bf12b520d38075a20a4ed7ab8ee1c695729879`.
+- Verified the host GPU as NVIDIA A100 80GB PCIe with driver 565.57.01 and CUDA 12.7.
+- Pulled `vllm/vllm-openai:v0.25.1` successfully, but rejected it because the container required a newer NVIDIA driver/CUDA path than the host exposed.
+- Pulled `vllm/vllm-openai:v0.8.5` successfully. The 4096-token server came up but rejected the one-image request because the decoder prompt length was 4863 tokens.
+- Restarted vLLM 0.8.5 with `--max-model-len 8192` and `--gpu-memory-utilization 0.80`; the first non-guided probe hit Markdown code fences and therefore failed strict JSON validity.
+- Tightened the probe prompt to forbid Markdown/code fences, reran against the warm 8192 server, and passed the one-image OpenAI-compatible gate with strict JSON.
+- Copied serving reports, vLLM logs, pull logs, and remote SHA-256 manifest to `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`.
+- Stopped `remedy-qwen25-vllm-serving-20260715` through the budget controller at 2026-07-15T18:36:42Z. The local ledger records $0.5285 for this serving-only window and $9.0366 cumulative conservative spend.
+- Requested delete after artifact transfer with `brev delete` by name, by ID, and through stdin. The final `brev ls` still showed the VM as `STOPPED`, not `RUNNING`; compute is stopped, but the Brev UI should be checked for lingering storage charges.

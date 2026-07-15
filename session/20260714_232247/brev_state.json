@@ -43,7 +43,15 @@
       "outcome": "stopped",
       "started_at": "2026-07-15T16:34:46.575378+00:00",
       "stopped_at": "2026-07-15T17:15:15.368330+00:00"
+    },
+    {
+      "cost_usd": 0.5285,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-vllm-serving-20260715",
+      "outcome": "stopped",
+      "started_at": "2026-07-15T18:20:41.508604+00:00",
+      "stopped_at": "2026-07-15T18:36:42.434681+00:00"
     }
   ],
-  "recorded_spend_usd": 8.5081
+  "recorded_spend_usd": 9.0366
 }
