@@ -32,6 +32,15 @@ def test_build_payload_uses_openai_compatible_image_url(tmp_path):
     assert json.loads('{"status":"pass","findings":[]}') == {"status": "pass", "findings": []}
 
 
+def test_build_payload_can_omit_response_format(tmp_path):
+    image = tmp_path / "page.png"
+    image.write_bytes(b"png")
+
+    payload = build_payload("Qwen/Qwen2.5-VL-3B-Instruct", image, response_format=False)
+
+    assert "response_format" not in payload
+
+
 def test_extract_message_content():
     response = {"choices": [{"message": {"content": '{"status":"pass","findings":[]}'}}]}
 

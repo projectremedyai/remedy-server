@@ -20,10 +20,16 @@ def image_data_uri(image_path: Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
 
 
-def build_payload(model: str, image_path: Path, *, max_tokens: int = 128) -> dict[str, Any]:
+def build_payload(
+    model: str,
+    image_path: Path,
+    *,
+    max_tokens: int = 128,
+    response_format: bool = True,
+) -> dict[str, Any]:
     """Build the minimal one-image chat-completions request."""
 
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [
             {
@@ -33,8 +39,9 @@ def build_payload(model: str, image_path: Path, *, max_tokens: int = 128) -> dic
                     {
                         "type": "text",
                         "text": (
-                            'Inspect the page. Return ONLY valid JSON with this exact shape: '
-                            '{"status":"pass","findings":[]}.'
+                            "Inspect the page. Return raw JSON only. Do not use Markdown, "
+                            "do not wrap the answer in code fences, and do not include prose. "
+                            'Use this exact JSON shape: {"status":"pass","findings":[]}.'
                         ),
                     },
                 ],
@@ -42,8 +49,10 @@ def build_payload(model: str, image_path: Path, *, max_tokens: int = 128) -> dic
         ],
         "temperature": 0,
         "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
     }
+    if response_format:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
 
 
 def post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
@@ -99,6 +108,7 @@ def run_probe(
     report_path: Path,
     ready_timeout_seconds: float,
     request_timeout_seconds: float,
+    response_format: bool,
 ) -> dict[str, Any]:
     """Run the one-image serving gate and write a machine-readable report."""
 
@@ -116,7 +126,7 @@ def run_probe(
         report["server_ready"] = True
         response = post_json(
             base_url.rstrip("/") + "/chat/completions",
-            build_payload(model, image_path),
+            build_payload(model, image_path, response_format=response_format),
             timeout=request_timeout_seconds,
         )
         content = extract_message_content(response)
@@ -146,6 +156,11 @@ def main() -> int:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--ready-timeout-seconds", type=float, default=600)
     parser.add_argument("--request-timeout-seconds", type=float, default=120)
+    parser.add_argument(
+        "--no-response-format",
+        action="store_true",
+        help="Omit response_format=json_object for vLLM versions where guided JSON rejects VLM requests.",
+    )
     args = parser.parse_args()
     if not args.image.is_file():
         raise SystemExit(f"image does not exist: {args.image}")
@@ -156,6 +171,7 @@ def main() -> int:
         report_path=args.report,
         ready_timeout_seconds=args.ready_timeout_seconds,
         request_timeout_seconds=args.request_timeout_seconds,
+        response_format=not args.no_response_format,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["technical_pass"] else 1
