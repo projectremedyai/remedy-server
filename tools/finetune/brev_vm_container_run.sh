@@ -4,6 +4,7 @@ set -euo pipefail
 image=nvcr.io/nvidia/nemo-rl:v0.6.0
 workspace=/home/ubuntu/workspace
 runtime_home=/home/ubuntu/nemo-runtime
+container_user=${REMEDY_BREV_CONTAINER_USER:-root}
 docker_cmd=(docker)
 
 mkdir -p "$workspace" "$runtime_home" /ephemeral/nemo-rl
@@ -17,7 +18,7 @@ exec "${docker_cmd[@]}" run --rm \
   --ipc=host \
   --network=host \
   --shm-size=16g \
-  --user "$(id -u):$(id -g)" \
+  --user "$container_user" \
   --env HOME=/home/ubuntu \
   --env PYTHONPATH=/home/ubuntu/workspace/remedy-server \
   --env HF_HOME=/ephemeral/nemo-rl/cache/huggingface \
