@@ -226,13 +226,22 @@ def run_vllm_compatibility(model_name: str, image_path: Path) -> dict[str, Any]:
     return {"one_image_vllm": True, "zero_shot_json_valid": True, "response": parsed}
 
 
-def run_spike(model_name: str, image_path: Path) -> dict[str, Any]:
-    """Run all technical gates and preserve failures in a machine-readable report."""
+def run_spike(model_name: str, image_path: Path, *, mode: str = "both") -> dict[str, Any]:
+    """Run selected technical gates and preserve failures in a machine-readable report."""
 
-    report: dict[str, Any] = {"model": model_name, "image": str(image_path), "technical_pass": False}
+    if mode not in {"both", "training", "inference"}:
+        raise ValueError(f"unsupported compatibility mode: {mode}")
+    report: dict[str, Any] = {
+        "model": model_name,
+        "image": str(image_path),
+        "mode": mode,
+        "technical_pass": False,
+    }
     try:
-        report["training"] = run_training_compatibility(model_name, image_path)
-        report["inference"] = run_vllm_compatibility(model_name, image_path)
+        if mode in {"both", "training"}:
+            report["training"] = run_training_compatibility(model_name, image_path)
+        if mode in {"both", "inference"}:
+            report["inference"] = run_vllm_compatibility(model_name, image_path)
         report["technical_pass"] = True
     except Exception as error:  # The report is the compatibility spike's primary artifact.
         report["error_type"] = type(error).__name__
@@ -248,10 +257,16 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--image", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=("both", "training", "inference"),
+        default="both",
+        help="Compatibility gate subset to run. Use training in the NeMo RL image and inference in a vLLM runtime.",
+    )
     args = parser.parse_args()
     if not args.image.is_file():
         raise SystemExit(f"image does not exist: {args.image}")
-    report = run_spike(args.model, args.image)
+    report = run_spike(args.model, args.image, mode=args.mode)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
