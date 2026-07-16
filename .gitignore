@@ -165,3 +165,4 @@ tools/finetune/**/*.pyc
 !session/
 !session/**/*.md
 !session/**/*.tsv
+session/20260714_232247/remote_artifacts/*/checkpoints/**/adapter_model.safetensors

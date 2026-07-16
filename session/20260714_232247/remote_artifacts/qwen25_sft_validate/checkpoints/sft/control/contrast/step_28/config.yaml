@@ -1,0 +1,228 @@
+checkpointing:
+  checkpoint_dir: /ephemeral/nemo-rl/checkpoints/sft/control/contrast
+  checkpoint_must_save_by: 00:02:45:00
+  enabled: true
+  higher_is_better: false
+  keep_top_k: 1
+  metric_name: val:val_loss
+  save_optimizer: true
+  save_period: 20
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1
+data:
+  add_bos: true
+  add_eos: true
+  add_generation_prompt: false
+  default:
+    dataset_name: openai_format
+    processor: sft_processor
+    prompt_file: null
+    system_prompt_file: null
+  max_input_seq_length: 4096
+  num_workers: 1
+  shuffle: true
+  train:
+  - data_path: /home/ubuntu/workspace/remedy-server/tools/finetune/generated/nemo_campaign_dataset/sft/contrast/train.jsonl
+    dataset_name: openai_format
+    processor: sft_processor
+    prompt_file: null
+    split: train
+    system_prompt_file: null
+  validation:
+  - data_path: /home/ubuntu/workspace/remedy-server/tools/finetune/generated/nemo_campaign_dataset/sft/contrast/validation.jsonl
+    dataset_name: openai_format
+    processor: sft_processor
+    prompt_file: null
+    split: valA
+    system_prompt_file: null
+logger:
+  gpu_monitoring:
+    collection_interval: 10
+    flush_interval: 10
+  log_dir: /ephemeral/nemo-rl/logs/sft/control/contrast/exp_001
+  mlflow:
+    experiment_name: sft-dev
+    run_name: sft-dev-openai_format
+    tracking_uri: http://localhost:5000
+  mlflow_enabled: false
+  monitor_gpus: true
+  swanlab:
+    name: sft-dev-openai_format
+    project: sft-dev
+  swanlab_enabled: false
+  tensorboard:
+    log_dir: tb_logs-sft-dev-openai_format
+  tensorboard_enabled: true
+  wandb:
+    name: sft-dev-openai_format
+    project: sft-dev
+  wandb_enabled: false
+policy:
+  dtensor_cfg:
+    _v2: true
+    activation_checkpointing: true
+    automodel_kwargs:
+      force_hf: true
+    context_parallel_size: 1
+    cpu_offload: false
+    custom_parallel_plan: null
+    enabled: true
+    env_vars: {}
+    lora_cfg:
+      alpha: 32
+      dim: 16
+      dropout: 0.0
+      dropout_position: post
+      enabled: true
+      exclude_modules: []
+      lora_A_init: xavier
+      match_all_linear: false
+      target_modules:
+      - '*.language_model.*.q_proj'
+      - '*.language_model.*.k_proj'
+      - '*.language_model.*.v_proj'
+      - '*.language_model.*.o_proj'
+      - '*.language_model.*.gate_proj'
+      - '*.language_model.*.up_proj'
+      - '*.language_model.*.down_proj'
+      use_triton: true
+    sequence_parallel: false
+    tensor_parallel_size: 1
+  dynamic_batching:
+    enabled: false
+    sequence_length_round: 64
+    train_mb_tokens: 4096
+  make_sequence_length_divisible_by: 1
+  max_grad_norm: 1.0
+  max_total_sequence_length: 4096
+  megatron_cfg:
+    activation_checkpointing: false
+    apply_rope_fusion: true
+    bias_activation_fusion: true
+    context_parallel_size: 1
+    defer_fp32_logits: false
+    distributed_data_parallel_config:
+      data_parallel_sharding_strategy: optim_grads_params
+      grad_reduce_in_fp32: false
+      overlap_grad_reduce: true
+      overlap_param_gather: true
+      use_custom_fsdp: false
+    empty_unused_memory_level: 1
+    enabled: false
+    env_vars: {}
+    expert_model_parallel_size: 1
+    expert_tensor_parallel_size: 1
+    force_reconvert_from_hf: false
+    fp8_cfg:
+      enabled: false
+      fp8: e4m3
+      fp8_param: false
+      fp8_recipe: blockwise
+    freeze_moe_router: false
+    gradient_accumulation_fusion: false
+    linear_ce_fusion_chunk_size: 256
+    moe_enable_deepep: false
+    moe_per_layer_logging: false
+    moe_permute_fusion: false
+    moe_router_bias_update_rate: 0.001
+    moe_router_dtype: null
+    moe_router_load_balancing_type: aux_loss
+    moe_shared_expert_overlap: false
+    moe_token_dispatcher_type: alltoall
+    num_layers_in_first_pipeline_stage: null
+    num_layers_in_last_pipeline_stage: null
+    optimizer:
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      adam_eps: 1.0e-05
+      bf16: true
+      clip_grad: 1.0
+      fp16: false
+      lr: 5.0e-06
+      min_lr: 4.9999e-06
+      optimizer: adam
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0.0
+      params_dtype: float32
+      sgd_momentum: 0.9
+      use_distributed_optimizer: true
+      use_precision_aware_optimizer: true
+      weight_decay: 0.1
+    peft:
+      a2a_experimental: false
+      alpha: 32
+      dim: 8
+      dropout: 0.0
+      dropout_position: post
+      enabled: false
+      exclude_modules: []
+      lora_A_init_method: xavier
+      lora_B_init_method: zero
+      lora_dtype: None
+      target_modules: []
+    pipeline_dtype: bfloat16
+    pipeline_model_parallel_size: 1
+    scheduler:
+      end_weight_decay: 0.1
+      lr_decay_iters: 1000
+      lr_decay_style: constant
+      lr_warmup_init: 4.9999e-06
+      lr_warmup_iters: 50
+      start_weight_decay: 0.1
+      weight_decay_incr_style: constant
+    sequence_parallel: false
+    tensor_model_parallel_size: 1
+    use_linear_ce_fusion_loss: false
+  model_name: Qwen/Qwen2.5-VL-3B-Instruct
+  offload_optimizer_for_logprob: false
+  optimizer:
+    kwargs:
+      betas:
+      - 0.9
+      - 0.98
+      eps: 1.0e-08
+      foreach: false
+      fused: false
+      lr: 2.0e-05
+      weight_decay: 0.01
+    name: torch.optim.AdamW
+  precision: bfloat16
+  scheduler:
+  - kwargs:
+      end_factor: 1.0
+      start_factor: 0.1
+      total_iters: 2
+    name: torch.optim.lr_scheduler.LinearLR
+  - kwargs:
+      factor: 1.0
+      total_iters: 1000000000
+    name: torch.optim.lr_scheduler.ConstantLR
+  - milestones:
+    - 2
+  sequence_packing:
+    algorithm: modified_first_fit_decreasing
+    enabled: false
+    sequence_length_round: 64
+    train_mb_tokens: 4096
+  tokenizer:
+    chat_template: '{% for message in messages %}{%- if message[''role''] == ''system''  %}{{''Context:
+      '' + message[''content''].strip()}}{%- elif message[''role''] == ''user''  %}{{''
+      Question: '' + message[''content''].strip() + '' Answer:''}}{%- elif message[''role'']
+      == ''assistant''  %}{{'' '' + message[''content''].strip()}}{%- endif %}{% endfor
+      %}'
+    chat_template_kwargs: null
+    name: Qwen/Qwen2.5-VL-3B-Instruct
+    use_processor: true
+  train_global_batch_size: 8
+  train_micro_batch_size: 1
+sft:
+  max_num_epochs: 2
+  max_num_steps: 1000000
+  seed: 20260714
+  val_at_end: true
+  val_at_start: true
+  val_batches: 8
+  val_global_batch_size: 32
+  val_micro_batch_size: 1
+  val_period: 20
