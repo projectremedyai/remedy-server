@@ -146,6 +146,28 @@ def _truncation_failures(out: dict[str, Any]) -> list[str]:
     return []
 
 
+def _batch_collate_failures(outs: list[dict[str, Any]], pad_token_id: int) -> list[str]:
+    """Collate a MIXED batch (normal + truncated rows) through the real path.
+
+    Row-level probes cannot see collation failures: a batch mixing media
+    rows with media-less rows (truncation drops the media) crashed
+    batched_message_log_to_flat_message with 'NoneType' has no attribute
+    'dim_to_pack' on all three window-A tasks while every row passed
+    individually. This probe batches the processed rows together exactly
+    like sft_train does.
+    """
+    from nemo_rl.data.llm_message_utils import batched_message_log_to_flat_message
+
+    try:
+        batched_message_log_to_flat_message(
+            [out["message_log"] for out in outs],
+            pad_value_dict={"token_ids": pad_token_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return [f"mixed-batch collation crashed: {type(exc).__name__}: {exc}"]
+    return []
+
+
 def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, Any]:
     """Process the first ``rows`` rows of each split through the real path."""
     from nemo_rl.algorithms.utils import get_tokenizer
@@ -177,6 +199,7 @@ def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, An
         probe_indices = select_probe_rows(lines, rows)
         dataset = OpenAIFormatDataset(str(jsonl))
         split_report: dict[str, Any] = {"rows_checked": 0, "failures": []}
+        collate_pool: list[dict[str, Any]] = []
         for idx in probe_indices:
             raw = json.loads(lines[idx])
             image_count, snippet = _raw_row_facts(raw)
@@ -196,11 +219,16 @@ def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, An
                         dataset.dataset[idx], spec, processor, max_seq_length, idx
                     )
                     failures.extend(_truncation_failures(truncated_out))
+                    collate_pool.append(truncated_out)
             except Exception as exc:  # noqa: BLE001
                 failures = [f"processing crashed: {type(exc).__name__}: {exc}"]
             split_report["rows_checked"] += 1
             for failure in failures:
                 split_report["failures"].append(f"row {idx}: {failure}")
+        if len(collate_pool) >= 2:
+            split_report["failures"].extend(
+                _batch_collate_failures(collate_pool, processor.tokenizer.pad_token_id)
+            )
         report["splits"][split] = split_report
         if split_report["failures"]:
             report["passed"] = False

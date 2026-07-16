@@ -162,6 +162,20 @@ def test_preflight_probes_the_longest_row_per_split() -> None:
     assert picked_tail_longest == [0, 1, 2]  # longest appended when not in head
 
 
+def test_collate_patch_tolerates_media_less_rows() -> None:
+    """Batches mixing media rows with media-less rows (e.g. rows truncated by
+    sft_processor) crashed collation: batched_message_log_to_flat_message
+    passes seq.get(key)=None entries into PackedTensor.flattened_concat
+    ('NoneType' has no attribute 'dim_to_pack' — hit live on all three window-A
+    tasks, 2026-07-16). It also dispatched on values[0] only, silently
+    bypassing packing when the FIRST row lacks media. The patch must filter
+    to actual PackedTensors and dispatch on ANY row having one."""
+    patch = ROOT / "tools/finetune/patches/nemo_rl_collate_skips_missing_media.patch"
+    text = patch.read_text(encoding="utf-8")
+    assert "nemo_rl/data/llm_message_utils.py" in text
+    assert "isinstance(v, PackedTensor)" in text
+
+
 def test_preflight_command_gates_the_same_task_and_config() -> None:
     command, environment = build_preflight_command(
         task="contrast",

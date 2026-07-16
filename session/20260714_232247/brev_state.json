@@ -1,8 +1,8 @@
 {
-  "active_deadline": null,
-  "active_hourly_rate_usd": null,
-  "active_instance": null,
-  "active_started_at": null,
+  "active_deadline": "2026-07-16T22:03:34.895402+00:00",
+  "active_hourly_rate_usd": 1.98,
+  "active_instance": "remedy-qwen25-sft-batch2-20260716",
+  "active_started_at": "2026-07-16T19:33:34.895402+00:00",
   "history": [
     {
       "cost_usd": 0.0929,

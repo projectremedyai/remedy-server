@@ -1,0 +1,22 @@
+diff --git a/nemo_rl/data/llm_message_utils.py b/nemo_rl/data/llm_message_utils.py
+index 2b7711210..cdd41d9c7 100644
+--- a/nemo_rl/data/llm_message_utils.py
++++ b/nemo_rl/data/llm_message_utils.py
+@@ -362,9 +362,14 @@ def batched_message_log_to_flat_message(
+     result = BatchedDataDict()
+     for key in all_keys:
+         values = [seq.get(key) for seq in sequenced_lists]
+-        # if the values are PackedTensors, create a new PackedTensor from the list of values
+-        if values and isinstance(values[0], PackedTensor):
+-            result[key] = PackedTensor.flattened_concat(values)
++        # if the values are PackedTensors, create a new PackedTensor from the list of values.
++        # Rows without media for this key (e.g. samples truncated by
++        # sft_processor) contribute None: filter them out rather than crash
++        # flattened_concat, and dispatch on ANY row carrying a PackedTensor
++        # so a media-less FIRST row cannot silently bypass packing.
++        packed_values = [v for v in values if isinstance(v, PackedTensor)]
++        if packed_values:
++            result[key] = PackedTensor.flattened_concat(packed_values)
+             continue
+         if not values or not isinstance(values[0], Tensor):
+             result[key] = values
