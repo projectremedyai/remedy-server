@@ -1,0 +1,30 @@
+diff --git a/nemo_rl/data/processors.py b/nemo_rl/data/processors.py
+index 2b9a3900f..9e45e3fec 100644
+--- a/nemo_rl/data/processors.py
++++ b/nemo_rl/data/processors.py
+@@ -156,6 +156,25 @@ def sft_processor(
+ 
+         datum_dict = format_clevr_cogent_dataset(datum_dict)
+ 
++    # HF datasets' Arrow schema unification pads heterogeneous multimodal
++    # content lists with None-valued keys (text parts gain "image": None,
++    # image parts gain "text": None). Qwen-style chat templates test key
++    # MEMBERSHIP ('image' in content), so a phantom image key makes a text
++    # part render as an extra <|image_pad|> placeholder, desyncing the
++    # placeholder count from the images actually loaded and crashing the
++    # processor's expansion loop (IndexError in image_grid_thw indexing).
++    # Strip the padding at read time: map()-time fixes are re-encoded
++    # through Arrow and re-padded, so this is the only safe place.
++    for _message in datum_dict["messages"]:
++        _content = _message.get("content")
++        if isinstance(_content, list):
++            _message["content"] = [
++                {k: v for k, v in _part.items() if v is not None}
++                if isinstance(_part, dict)
++                else _part
++                for _part in _content
++            ]
++
+     message_log = get_formatted_message_log(
+         datum_dict["messages"],
+         tokenizer,

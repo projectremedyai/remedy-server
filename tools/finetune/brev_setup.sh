@@ -23,6 +23,20 @@ fi
 git config --global --add safe.directory /home/ubuntu/RL
 git config --global --add safe.directory /home/ubuntu/Gym
 git -C /home/ubuntu/RL checkout --detach c339070fa3bfa83a5ac58ff80d73518911e14b81
+
+# Fix the VLM SFT dataloader crash: datasets==4.4.1 None-pads heterogeneous
+# multimodal content lists at load time, which makes Qwen chat templates
+# render text parts as extra <|image_pad|> placeholders and crash the HF
+# processor (IndexError in image_grid_thw indexing) on the first batch.
+# The patch strips the None padding at read time inside sft_processor.
+strip_none_patch=/home/ubuntu/workspace/remedy-server/tools/finetune/patches/nemo_rl_strip_none_multimodal_content.patch
+if git -C /home/ubuntu/RL apply --reverse --check "$strip_none_patch" 2>/dev/null; then
+  echo "strip-none multimodal patch already applied"
+else
+  git -C /home/ubuntu/RL apply "$strip_none_patch"
+  echo "strip-none multimodal patch applied"
+fi
+
 git -C /home/ubuntu/Gym fetch --depth 1 origin 25d471edfc6db9d783b31140a4e10e6194455f71
 git -C /home/ubuntu/Gym checkout --detach 25d471edfc6db9d783b31140a4e10e6194455f71
 "$python_bin" -m pip install --no-deps -e /home/ubuntu/Gym

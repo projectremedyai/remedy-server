@@ -4,13 +4,13 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-15 12:13:26 PDT
+- Updated: 2026-07-16 10:29:31 PDT
 
 ## Goal
 Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
 
 ## Current Subtask
-Fix the NeMo RL VLM SFT data-processor compatibility blocker before spending more on Qwen2.5 training.
+The `image_grid_thw` SFT dataloader blocker is ROOT-CAUSED, REPRODUCED, and FIXED locally at $0 (2026-07-16). Next paid action, when authorized: rerun the low-cost Qwen2.5 SFT smoke — setup now applies the strip-None patch and the campaign launcher preflights the real dataloader path before training starts.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -19,6 +19,7 @@ Fix the NeMo RL VLM SFT data-processor compatibility blocker before spending mor
 - `nemo-rl-brev-etiquette` - keep source small and route checkpoints, caches, logs, and Ray state to `/ephemeral` on Brev.
 
 ## Current Status
+- Recovery check on 2026-07-16 confirmed the worktree was clean before this documentation refresh, `brev ls` reported no instances in org `johnny-01be29-vebe`, and `brev_state.json` reported no active instance, $0.00 active accrued cost, and $9.9713 conservative local tracked spend.
 - Current `main` was clean at `24f94a0` when the worktree was created.
 - The older `codex/multitask-next` worktree remains separate and dirty only with its prior generated evaluation state.
 - Four NVIDIA skills were installed globally and verified with `npx skills list -g`.
@@ -54,16 +55,23 @@ Fix the NeMo RL VLM SFT data-processor compatibility blocker before spending mor
 - Qwen2.5-VL-3B passed the one-image OpenAI-compatible `/v1/chat/completions` gate on vLLM 0.8.5 with strict zero-shot JSON after the raw-JSON prompt: `server_ready=true`, `one_image_chat_completions=true`, `zero_shot_json_valid=true`, and `technical_pass=true`.
 - Local serving proof artifacts are under `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`, including probe reports, vLLM logs, pull logs, and remote SHA-256 manifest.
 - The serving VM was stopped through the budget controller at 2026-07-15T18:36:42Z. `brev_state.json` records $0.5285 for this serving-only window and $9.0366 conservative local tracked spend.
-- Delete was requested after artifact transfer with `brev delete` by name, by ID, and through stdin. The final `brev ls` still showed `STOPPED`, not `RUNNING`; treat compute as stopped but verify/delete manually if storage charges appear.
+- Delete was requested after artifact transfer with `brev delete` by name, by ID, and through stdin. It still showed `STOPPED`, not `RUNNING`, on 2026-07-15; the 2026-07-16 recovery check showed no instances, so the delete/state convergence eventually completed.
 - Added guarded restart support in commit `4dcb5bb`, but `brev start remedy-qwen25-vllm-serving-20260715` stayed in a loop reporting `instance is stopped`; the command was interrupted before the budget controller recorded an active window.
 - Launched fresh A100 VM `remedy-qwen25-sft-smoke-20260715` for a 1.5-hour Qwen2.5 SFT smoke at $1.98/hour. The payload SHA-256 was `29685583c1d51c5b439705541dcff36cfa59caf6d0df3bbb8efdf53a3c2f3f47`.
 - The SFT smoke proved the fresh A100 VM, official NeMo RL image, pinned RL/Gym setup, Qwen2.5 model load, and explicit language-module LoRA recipe up to the first dataloader batch.
 - The SFT smoke did not produce a checkpoint. It stopped on a NeMo RL VLM SFT processor compatibility blocker: `IndexError: index 1 is out of bounds for dimension 0 with size 1` in Qwen2.5-VL `image_grid_thw`.
 - Variants tried before stopping: text-first content order, absolute image paths, native Qwen chat template, disabling BOS/EOS, and disabling validation. Training still fails on the first dataloader batch.
 - The SFT smoke VM was stopped through the budget controller at 2026-07-15T19:13:26Z. `brev_state.json` records $0.9347 for this SFT smoke window and $9.9713 conservative local tracked spend.
-- `brev delete remedy-qwen25-sft-smoke-20260715` returned successfully, but final `brev ls` still showed the SFT VM as `STOPPED`, not `RUNNING`. The earlier stopped serving VM no longer appeared in `brev ls`.
+- `brev delete remedy-qwen25-sft-smoke-20260715` initially returned successfully while `brev ls` still showed the SFT VM as `STOPPED`; the 2026-07-16 recovery check confirmed that Brev later converged and now reports no instances.
 - Remote reports could not be copied after the stop because SSH reset during shutdown. The captured JSON output is summarized in `session/20260714_232247/compatibility_results_20260715.md`.
-- Fresh final verification passed: 347 unit tests passed, one skipped; shell syntax, Python compilation, and all campaign YAML files also passed.
+- Focused final verification after the Qwen2.5 serving/SFT smoke changes passed: `uv run pytest -q tests/unit/test_nemo_rl_campaign.py tests/unit/test_nemo_rl_campaign_configs.py tests/unit/test_brev_campaign_control.py tests/unit/test_openai_vlm_probe.py` reported 15 passed. Earlier full local verification passed with 347 unit tests passed and one skipped; shell syntax, Python compilation, and all campaign YAML files also passed.
+- 2026-07-16: the `image_grid_thw` blocker was root-caused, reproduced, and fixed locally at $0. Root cause: NeMo RL's pinned `datasets==4.4.1` None-pads heterogeneous multimodal `content` lists at `load_dataset("json", ...)` time (text parts gain a phantom `"image": None` key); Qwen2.5-VL's chat template tests key MEMBERSHIP (`'image' in content`), so corrupted text parts render as extra `<|image_pad|>` placeholders (their real text silently dropped), desyncing the placeholder count from the single loaded image and crashing the HF processor's unbounded expansion loop on the first batch. This explains why all six variants tried on the paid smoke failed identically — they were all downstream of the loader.
+- The exact paid-smoke `IndexError` was reproduced on this Mac (CPU, no GPU) by running the REAL pinned NeMo code (`OpenAIFormatDataset` -> `sft_processor` -> `Qwen2_5_VLProcessor`) on the first real row of `sft/train.jsonl`: `session/20260714_232247/repro_image_grid_thw.py`.
+- Fix shipped: `tools/finetune/patches/nemo_rl_strip_none_multimodal_content.patch` strips None-valued keys from content parts at READ time inside `sft_processor` (the only correct placement — `Dataset.map` re-encodes through Arrow and re-injects the Nones). `brev_setup.sh` applies it idempotently after the pinned checkout. RED->GREEN verified: the same real row flips from IndexError to a clean 2-turn log with exactly one vision block and the prompt text intact.
+- `use_preserving_dataset: true` (the obvious YAML-only alternative) was tested and RULED OUT: `run_sft.py:92` `concatenate_datasets` type-rejects `PreservingDataset` ("Expected a list of Dataset objects...").
+- New paid-run gate: `tools/finetune/remedy_nemo_rl/dataloader_preflight.py` replays real rows through the real processing path inside the container in seconds; `campaign._run_sft` now runs it before training and aborts on failure, so a data-processing defect costs a log line instead of a paid training window.
+- Full local verification after the fix: 359 unit tests passed, 1 skipped; `bash -n brev_setup.sh` and `py_compile` clean.
+- NOTE: `.gitignore` line 150 (`tools/finetune/*`) ignores non-`.py` files there — the `.patch` file must be committed with `git add -f` or it silently never ships in a payload.
 
 ## Plan
 - [x] Recover only the reusable five-task builders, evaluators, and trainer scaffolding.
@@ -92,4 +100,5 @@ Fix the NeMo RL VLM SFT data-processor compatibility blocker before spending mor
 - Do not install vLLM into the NeMo RL training image for the next spike. Treat training and serving as separate runtimes or build explicit derived images.
 - The second H100 VM stop showed Brev status lag: guarded stop recorded success, direct stop then reported the backend state was already `stopped`, while `brev ls` displayed `STOPPING`. Re-check `brev ls` before any paid restart and delete stopped instances if storage cost becomes a concern.
 - `vllm/vllm-openai:v0.25.1` is not compatible with the current Crusoe A100 80GB driver stack observed in this Brev VM. Use `vllm/vllm-openai:v0.8.5` for the Qwen2.5 serving-only gate unless a newer driver image/host is intentionally selected.
-- Do not start another paid SFT run until the Qwen2.5-VL NeMo `sft_processor` / `image_grid_thw` failure is reproduced and fixed locally or with a minimal unpaid/short smoke.
+- RESOLVED 2026-07-16: the Qwen2.5-VL `sft_processor` / `image_grid_thw` failure is reproduced and fixed locally (strip-None patch + dataloader preflight gate). A paid SFT smoke rerun is unblocked, subject to the usual budget guards and fresh user authorization.
+- Qwen3.5-9B remains parked: activation checkpointing was already on and a single-image forward/backward filled 79.16 GiB of the 80 GiB H100. Realistic single-GPU rescues (8-bit/paged optimizer, CPU-offload optimizer state, reduced `max_pixels` vision resolution, shorter max sequence length) each trade fidelity or wall-time and none is proven; multi-GPU escalation requires fresh user approval. Do not spend on Qwen3.5 without deliberately choosing one of those strategies first.

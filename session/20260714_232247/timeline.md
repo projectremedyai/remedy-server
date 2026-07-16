@@ -78,7 +78,7 @@
 - Tightened the probe prompt to forbid Markdown/code fences, reran against the warm 8192 server, and passed the one-image OpenAI-compatible gate with strict JSON.
 - Copied serving reports, vLLM logs, pull logs, and remote SHA-256 manifest to `session/20260714_232247/remote_artifacts/qwen25_vllm_serving/`.
 - Stopped `remedy-qwen25-vllm-serving-20260715` through the budget controller at 2026-07-15T18:36:42Z. The local ledger records $0.5285 for this serving-only window and $9.0366 cumulative conservative spend.
-- Requested delete after artifact transfer with `brev delete` by name, by ID, and through stdin. The final `brev ls` still showed the VM as `STOPPED`, not `RUNNING`; compute is stopped, but the Brev UI should be checked for lingering storage charges.
+- Requested delete after artifact transfer with `brev delete` by name, by ID, and through stdin. The final 2026-07-15 `brev ls` still showed the VM as `STOPPED`, not `RUNNING`; this later converged, and the 2026-07-16 recovery check showed no instances.
 
 ## 2026-07-15 11:45:07 PDT
 - Added guarded `start-existing` support in commit `4dcb5bb`.
@@ -96,4 +96,24 @@
   - native Qwen chat template with BOS/EOS disabled
   - validation disabled
 - Stopped `remedy-qwen25-sft-smoke-20260715` through the budget controller at 2026-07-15T19:13:26Z. The local ledger records $0.9347 for this SFT smoke and $9.9713 cumulative conservative spend.
-- Requested deletion for `remedy-qwen25-sft-smoke-20260715`; the CLI returned successfully, but final `brev ls` still showed it as `STOPPED`. The earlier serving VM no longer appeared in `brev ls`.
+- Requested deletion for `remedy-qwen25-sft-smoke-20260715`; the CLI returned successfully, but final 2026-07-15 `brev ls` still showed it as `STOPPED`. This later converged, and the 2026-07-16 recovery check showed no instances.
+
+## 2026-07-16 09:31:43 PDT
+- User asked to update `handoff.md`, `session_state.md`, and `timeline.md`.
+- Re-read the session-memory skill and verified current state before editing.
+- `brev ls` reported no instances in org `johnny-01be29-vebe`; the stopped SFT VM from 2026-07-15 has disappeared, so Brev deletion eventually converged.
+- `brev_state.json` reported `active_instance=null`, `active_accrued_cost_usd=0.0`, and conservative local tracked spend of $9.9713.
+- Git branch remained `codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving`; the worktree was clean before this markdown refresh.
+- Updated the handoff/session/timeline notes to reflect the no-instance Brev state and the current next action: fix the NeMo RL VLM SFT `image_grid_thw` processor blocker locally before any further paid training run.
+
+## 2026-07-16 10:29:31 PDT
+- User asked for a solution to the campaign blockers; work was done locally at $0 with no Brev instance launched.
+- Delegated a source-excavation agent over pinned NeMo RL `c339070`; its finding was then independently verified line-by-line and live-reproduced before being relied on.
+- Root-caused the `image_grid_thw` SFT dataloader crash: pinned `datasets==4.4.1` None-pads heterogeneous multimodal `content` lists at `load_dataset("json", ...)` time; Qwen2.5-VL's chat template tests key membership (`'image' in content`), so text parts with phantom `image: None` keys render as extra `<|image_pad|>` placeholders (their text silently dropped), desyncing placeholders (2) from loaded images (1) and crashing the HF processor's unbounded expansion loop on the first batch.
+- Reproduced the exact paid-smoke IndexError on the Mac (CPU-only) by running the real pinned NeMo path (`OpenAIFormatDataset` -> `sft_processor` -> `Qwen2_5_VLProcessor`, transformers 5.3.0-equivalent loop) against the first real row of `sft/train.jsonl` — `session/20260714_232247/repro_image_grid_thw.py`.
+- Empirically RULED OUT `use_preserving_dataset: true` as a YAML-only fix: `run_sft.py:92` `concatenate_datasets` raises `ValueError: Expected a list of Dataset objects ... element at position 0 is a PreservingDataset`.
+- Shipped the fix as a read-time None-strip inside `sft_processor` (`tools/finetune/patches/nemo_rl_strip_none_multimodal_content.patch`), applied idempotently by `brev_setup.sh` after the pinned checkout; `git apply --check` verified against the pinned tree; RED->GREEN proven on the same real row (clean 2-turn log, one vision block, prompt text intact).
+- Added a paid-run gate: `tools/finetune/remedy_nemo_rl/dataloader_preflight.py` replays real rows through the real processing path in-container in seconds, and `campaign._run_sft` now aborts before training if it fails.
+- TDD: `tests/unit/test_nemo_rl_vlm_dataloader_fix.py` written first (8 tests: patch placement, idempotent setup hook, preflight row checks, preflight-before-training ordering, abort-on-preflight-failure). Full suite after: 359 passed, 1 skipped; shell syntax and py_compile clean.
+- Recorded experiments 21 (root cause + repro) and 22 (fix + gate) in `experiments.tsv`; campaign spend unchanged at $9.9713 conservative local / $7.28 last authoritative provider view.
+- Qwen3.5-9B stays parked with an explicit memory-strategy decision note in the handoff; GRPO-stage loaders flagged for the same datasets None-padding trap.

@@ -72,6 +72,43 @@ def build_sft_command(
     return command, environment
 
 
+def build_preflight_command(
+    *,
+    task: str,
+    model_role: str,
+    dataset_root: Path,
+) -> tuple[list[str], dict[str, str]]:
+    """Construct the dataloader preflight that must pass before SFT starts.
+
+    The 2026-07-15 paid smoke died on the first dataloader batch after the
+    VM, image pull, and setup were already paid for. This gate replays the
+    real data path on real rows in seconds, so a data-processing defect
+    costs a log line instead of a training window.
+    """
+
+    if task not in TASKS_BY_PAID_PRIORITY:
+        raise ValueError(f"unsupported task: {task}")
+    if model_role not in MODEL_CONFIGS:
+        raise ValueError(f"unsupported model role: {model_role}")
+    command = [
+        "python",
+        "-m",
+        "tools.finetune.remedy_nemo_rl.dataloader_preflight",
+        "--task-root",
+        str(dataset_root / "sft" / task),
+        "--config",
+        MODEL_CONFIGS[model_role],
+        "--rows",
+        "4",
+    ]
+    environment = {
+        "PYTHONPATH": "/home/ubuntu/workspace/remedy-server",
+        "HF_HOME": "/ephemeral/nemo-rl/cache/huggingface",
+        "HUGGINGFACE_HUB_CACHE": "/ephemeral/nemo-rl/cache/huggingface/hub",
+    }
+    return command, environment
+
+
 def campaign_plan(manifest: dict[str, Any], dataset_root: Path) -> list[dict[str, Any]]:
     """Return deterministic target SFT stages ordered to maximize evidence per paid minute."""
 
@@ -117,7 +154,29 @@ def _run_sft(args: argparse.Namespace) -> int:
         "environment=" + json.dumps(environment, sort_keys=True) + "\ncommand=" + shlex.join(command) + "\n",
         encoding="utf-8",
     )
+    preflight_command, preflight_env = build_preflight_command(
+        task=args.task,
+        model_role=args.model_role,
+        dataset_root=args.dataset_root,
+    )
+    preflight_merged_env = os.environ.copy()
+    preflight_merged_env.update(preflight_env)
     with log.open("a", encoding="utf-8") as stream:
+        stream.write("preflight=" + shlex.join(preflight_command) + "\n")
+        stream.flush()
+        preflight = subprocess.run(
+            preflight_command,
+            cwd=task_root,
+            env=preflight_merged_env,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+        )
+        if preflight.returncode != 0:
+            stream.write(
+                f"preflight failed with exit code {preflight.returncode}; "
+                "training NOT started\n"
+            )
+            return preflight.returncode
         return subprocess.run(command, cwd=task_root, env=merged_env, stdout=stream, stderr=subprocess.STDOUT).returncode
 
 
