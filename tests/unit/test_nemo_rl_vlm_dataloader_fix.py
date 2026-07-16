@@ -123,6 +123,45 @@ def test_lora_target_modules_are_language_scoped_wildcards() -> None:
             )
 
 
+def test_truncation_patch_drops_media_with_the_token_stub() -> None:
+    """sft_processor's over-length truncation chops token_ids to a ~4-token
+    stub but leaves pixel_values attached, so ANY row longer than
+    max_total_sequence_length crashes the whole run in the model forward:
+    'Image features and image tokens do not match, tokens: 0, features: N'
+    (hit live on table_structure, 2026-07-16). The patch must strip media
+    keys alongside the token stub so overlong rows are masked, not fatal."""
+    patch = ROOT / "tools/finetune/patches/nemo_rl_truncation_drops_media.patch"
+    text = patch.read_text(encoding="utf-8")
+    assert "nemo_rl/data/processors.py" in text
+    # Modality-agnostic: media rides on messages as PackedTensor values, so
+    # the patch drops every PackedTensor-valued key rather than hardcoding
+    # pixel_values/image_grid_thw/audio/video key names.
+    assert "isinstance(v, PackedTensor)" in text
+    assert "del message[_media_key]" in text
+
+
+def test_brev_setup_applies_every_patch_in_the_patches_dir() -> None:
+    """Patches accumulate; setup must apply all of them idempotently rather
+    than hardcoding one filename (the second patch silently not shipping is
+    exactly the class of failure that burned the first smoke)."""
+    text = SETUP.read_text(encoding="utf-8")
+    assert "patches/" in text and "*.patch" in text
+
+
+def test_preflight_probes_the_longest_row_per_split() -> None:
+    """The truncation crash escaped the preflight because the first N rows
+    are short. The preflight must also probe each split's LONGEST row (by
+    raw line length) so length-dependent failures surface in seconds."""
+    from tools.finetune.remedy_nemo_rl.dataloader_preflight import select_probe_rows
+
+    lines = ["{'a': 1}", "x" * 500, "{'b': 2}", "x" * 90, "{'c': 3}"]
+    picked = select_probe_rows(lines, rows=2)
+    assert picked[:2] == [0, 1]  # the first N...
+    assert 1 in picked  # ...and the longest (index 1) is guaranteed present
+    picked_tail_longest = select_probe_rows(["short", "aa", "b" * 999], rows=2)
+    assert picked_tail_longest == [0, 1, 2]  # longest appended when not in head
+
+
 def test_preflight_command_gates_the_same_task_and_config() -> None:
     command, environment = build_preflight_command(
         task="contrast",

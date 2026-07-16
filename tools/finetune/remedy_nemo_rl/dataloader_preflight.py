@@ -66,6 +66,23 @@ def row_failures(
     return failures
 
 
+def select_probe_rows(lines: list[str], rows: int) -> list[int]:
+    """Indices to probe: the first ``rows`` rows PLUS each split's longest row.
+
+    The first-N-only strategy missed the truncation crash (overlong
+    table_structure rows stub their tokens but kept media attached, killing
+    the forward). Raw line length is a cheap, reliable proxy for token
+    length, so the longest row is always probed too.
+    """
+    head = list(range(min(rows, len(lines))))
+    if not lines:
+        return head
+    longest = max(range(len(lines)), key=lambda i: len(lines[i]))
+    if longest not in head:
+        head.append(longest)
+    return head
+
+
 def _raw_row_facts(row: dict[str, Any]) -> tuple[int, str | None]:
     """Image count and a distinctive text snippet from a raw JSONL row."""
     image_count = 0
@@ -96,6 +113,39 @@ def _model_name_from_config(config_path: Path) -> str:
     return str(model_name)
 
 
+def _max_seq_length_from_config(config_path: Path) -> int | None:
+    import yaml
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    value = config.get("policy", {}).get("max_total_sequence_length")
+    return int(value) if value else None
+
+
+def _truncation_failures(out: dict[str, Any]) -> list[str]:
+    """When a row is truncated (masked), NO media may survive on any message.
+
+    Unpatched NeMo stubs token_ids but keeps media attached; the batch then
+    dies in the model forward with 'Image features and image tokens do not
+    match'. This asserts the patched invariant on the real processing output.
+    """
+    from nemo_rl.data.multimodal_utils import PackedTensor
+
+    if out.get("loss_multiplier", 1.0) != 0.0:
+        return []
+    leftovers = [
+        key
+        for message in out["message_log"]
+        for key, value in message.items()
+        if isinstance(value, PackedTensor)
+    ]
+    if leftovers:
+        return [
+            "truncated row still carries media keys "
+            f"{sorted(set(leftovers))} (would crash the model forward)"
+        ]
+    return []
+
+
 def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, Any]:
     """Process the first ``rows`` rows of each split through the real path."""
     from nemo_rl.algorithms.utils import get_tokenizer
@@ -106,6 +156,7 @@ def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, An
     from nemo_rl.data.processors import sft_processor
 
     model_name = _model_name_from_config(config_path)
+    max_seq_length = _max_seq_length_from_config(config_path)
     processor = get_tokenizer({"name": model_name}, get_processor=True)
     spec = TaskDataSpec(task_name="dataloader_preflight")
 
@@ -113,20 +164,21 @@ def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, An
         "model": model_name,
         "task_root": str(task_root),
         "rows_requested_per_split": rows,
+        "max_seq_length_probed": max_seq_length,
         "splits": {},
         "passed": True,
     }
 
     for split in ("train", "validation"):
         jsonl = task_root / f"{split}.jsonl"
-        raw_rows = [
-            json.loads(line)
-            for line in jsonl.read_text(encoding="utf-8").splitlines()[:rows]
-            if line.strip()
+        lines = [
+            line for line in jsonl.read_text(encoding="utf-8").splitlines() if line.strip()
         ]
+        probe_indices = select_probe_rows(lines, rows)
         dataset = OpenAIFormatDataset(str(jsonl))
         split_report: dict[str, Any] = {"rows_checked": 0, "failures": []}
-        for idx, raw in enumerate(raw_rows):
+        for idx in probe_indices:
+            raw = json.loads(lines[idx])
             image_count, snippet = _raw_row_facts(raw)
             try:
                 out = sft_processor(dataset.dataset[idx], spec, processor, 1 << 30, idx)
@@ -136,6 +188,14 @@ def run_preflight(task_root: Path, config_path: Path, rows: int) -> dict[str, An
                 failures = row_failures(
                     decoded, image_count, must_contain=snippet
                 )
+                # Re-process at the REAL training sequence limit so
+                # truncation behavior is exercised on the rows most likely
+                # to trigger it (notably each split's longest row).
+                if max_seq_length is not None:
+                    truncated_out = sft_processor(
+                        dataset.dataset[idx], spec, processor, max_seq_length, idx
+                    )
+                    failures.extend(_truncation_failures(truncated_out))
             except Exception as exc:  # noqa: BLE001
                 failures = [f"processing crashed: {type(exc).__name__}: {exc}"]
             split_report["rows_checked"] += 1

@@ -67,7 +67,15 @@
       "outcome": "stopped",
       "started_at": "2026-07-16T17:39:58.038137+00:00",
       "stopped_at": "2026-07-16T18:12:18.539061+00:00"
+    },
+    {
+      "cost_usd": 0.9107,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-sft-validate-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-16T18:58:22.926762+00:00",
+      "stopped_at": "2026-07-16T19:25:58.728500+00:00"
     }
   ],
-  "recorded_spend_usd": 11.0386
+  "recorded_spend_usd": 11.9493
 }

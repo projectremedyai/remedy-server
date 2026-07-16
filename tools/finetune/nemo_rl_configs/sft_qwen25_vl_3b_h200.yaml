@@ -20,7 +20,9 @@ policy:
     name: ${policy.model_name}
   train_global_batch_size: 8
   train_micro_batch_size: 1
-  max_total_sequence_length: 4096
+  # 8192: table_structure rows (dense cell text + ~2-5k image tokens)
+  # overflow 4096 and a truncated multimodal row is wasted signal.
+  max_total_sequence_length: 8192
   precision: bfloat16
   dtensor_cfg:
     _v2: true

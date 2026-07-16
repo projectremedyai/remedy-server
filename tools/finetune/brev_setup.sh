@@ -24,18 +24,23 @@ git config --global --add safe.directory /home/ubuntu/RL
 git config --global --add safe.directory /home/ubuntu/Gym
 git -C /home/ubuntu/RL checkout --detach c339070fa3bfa83a5ac58ff80d73518911e14b81
 
-# Fix the VLM SFT dataloader crash: datasets==4.4.1 None-pads heterogeneous
-# multimodal content lists at load time, which makes Qwen chat templates
-# render text parts as extra <|image_pad|> placeholders and crash the HF
-# processor (IndexError in image_grid_thw indexing) on the first batch.
-# The patch strips the None padding at read time inside sft_processor.
-strip_none_patch=/home/ubuntu/workspace/remedy-server/tools/finetune/patches/nemo_rl_strip_none_multimodal_content.patch
-if git -C /home/ubuntu/RL apply --reverse --check "$strip_none_patch" 2>/dev/null; then
-  echo "strip-none multimodal patch already applied"
-else
-  git -C /home/ubuntu/RL apply "$strip_none_patch"
-  echo "strip-none multimodal patch applied"
-fi
+# Apply every NeMo RL patch in the payload's patches dir, idempotently:
+# - nemo_rl_strip_none_multimodal_content.patch: datasets==4.4.1 None-pads
+#   heterogeneous multimodal content lists at load time, making Qwen chat
+#   templates render text parts as extra <|image_pad|> placeholders and
+#   crash the HF processor (IndexError in image_grid_thw) on batch one.
+# - nemo_rl_truncation_drops_media.patch: sft_processor's over-length
+#   truncation stubs token_ids but leaves media features attached, so any
+#   row over max_total_sequence_length crashes the forward with 'Image
+#   features and image tokens do not match'. Media must drop with the stub.
+for nemo_patch in /home/ubuntu/workspace/remedy-server/tools/finetune/patches/*.patch; do
+  if git -C /home/ubuntu/RL apply --reverse --check "$nemo_patch" 2>/dev/null; then
+    echo "already applied: $(basename "$nemo_patch")"
+  else
+    git -C /home/ubuntu/RL apply "$nemo_patch"
+    echo "applied: $(basename "$nemo_patch")"
+  fi
+done
 
 # The official image bakes its own nemo_rl copy at /opt/nemo-rl, which shadows
 # the pinned+patched clone at import time (proven on the 2026-07-16 smoke:

@@ -47,7 +47,7 @@ def test_sft_recipes_have_identical_five_adapter_hyperparameters() -> None:
         assert recipe["sft"]["max_num_epochs"] == 2
         assert recipe["policy"]["train_micro_batch_size"] == 1
         assert recipe["policy"]["train_global_batch_size"] == 8
-        assert recipe["policy"]["max_total_sequence_length"] == 4096
+        assert recipe["policy"]["max_total_sequence_length"] == 8192
         assert recipe["policy"]["precision"] == "bfloat16"
         assert recipe["policy"]["optimizer"]["kwargs"]["lr"] == 2e-5
         lora = recipe["policy"]["dtensor_cfg"]["lora_cfg"]

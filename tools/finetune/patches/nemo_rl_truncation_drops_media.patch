@@ -1,0 +1,28 @@
+diff --git a/nemo_rl/data/processors.py b/nemo_rl/data/processors.py
+index 2b9a3900f..861aea5ed 100644
+--- a/nemo_rl/data/processors.py
++++ b/nemo_rl/data/processors.py
+@@ -30,6 +30,7 @@ from nemo_rl.data.interfaces import (
+     VLMMessageLogType,
+ )
+ from nemo_rl.data.llm_message_utils import get_formatted_message_log
++from nemo_rl.data.multimodal_utils import PackedTensor
+ 
+ TokenizerType = PreTrainedTokenizerBase
+ 
+@@ -175,6 +176,15 @@ def sft_processor(
+             message["token_ids"] = message["token_ids"][
+                 : min(4, max_seq_length // len(message_log))
+             ]
++            # Truncation reduces the text to a stub, deleting the multimodal
++            # placeholder tokens -- but the media features would still ride
++            # along in the batch and the model forward hard-fails with
++            # 'Image features and image tokens do not match'. Drop the media
++            # with the tokens so an overlong sample is masked, not fatal.
++            for _media_key in [
++                k for k, v in message.items() if isinstance(v, PackedTensor)
++            ]:
++                del message[_media_key]
+         loss_multiplier = 0.0
+ 
+     output: DatumSpec = {
