@@ -32,7 +32,17 @@ policy:
       force_hf: true
     lora_cfg:
       enabled: true
-      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+      # Language-scoped WILDCARD patterns — see sft_qwen25_vl_3b_h200.yaml.
+      # NOTE: Qwen3.5 is parked (OOM); verify these paths against the printed
+      # model tree before any paid Qwen3.5 run.
+      target_modules:
+        - '*.language_model.*.q_proj'
+        - '*.language_model.*.k_proj'
+        - '*.language_model.*.v_proj'
+        - '*.language_model.*.o_proj'
+        - '*.language_model.*.gate_proj'
+        - '*.language_model.*.up_proj'
+        - '*.language_model.*.down_proj'
       exclude_modules: []
       match_all_linear: false
       dim: 16

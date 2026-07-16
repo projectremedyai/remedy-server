@@ -32,7 +32,19 @@ policy:
       force_hf: true
     lora_cfg:
       enabled: true
-      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+      # Language-scoped WILDCARD patterns, not bare names. NeMo Automodel's
+      # ModuleMatcher anchors re.match on the full dotted path, so bare
+      # names match NOTHING (proven: the 2026-07-16 smoke ran 28 steps with
+      # zero adapters). Unscoped '*.gate_proj' would also hit Qwen2.5-VL's
+      # VISION tower MLP (same proj names) — scope to language_model.
+      target_modules:
+        - '*.language_model.*.q_proj'
+        - '*.language_model.*.k_proj'
+        - '*.language_model.*.v_proj'
+        - '*.language_model.*.o_proj'
+        - '*.language_model.*.gate_proj'
+        - '*.language_model.*.up_proj'
+        - '*.language_model.*.down_proj'
       exclude_modules: []
       match_all_linear: false
       dim: 16

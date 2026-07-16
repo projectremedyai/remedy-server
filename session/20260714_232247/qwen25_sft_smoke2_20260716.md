@@ -1,16 +1,34 @@
 # Qwen2.5 SFT Smoke 2 - 2026-07-16 - pipeline SUCCESS, adapter export DEFECTIVE
 
-> **Post-retrieval audit correction:** `step_28/policy/weights/model/adapter_model.safetensors`
-> is a **16-byte empty stub** — NeMo's consolidated LoRA save wrote NO weights.
-> The trainer warned: `save_consolidated=True but v4_compatible=False; checkpoint
-> assets may be not compatible with transformers v4; [experimental] set
-> --checkpoint.v4_compatible=True to enable`. Training itself is real
-> (consumed_samples=224, end val_loss 1.6127, loss trace in the log), and the
-> 2026-07-15 compat spike proved plain `peft save_pretrained` works on this
-> stack — so the defect is in NeMo's checkpointing consolidation path, not the
-> model. **Next: $0 source diagnosis of that save path (likely the
-> `v4_compatible` flag or a small patch) BEFORE any re-run.** The re-run to
-> validate the export can be tiny (a few steps), not a full smoke.
+> **Post-retrieval audit correction (root cause found 2026-07-16 evening, $0):**
+> `adapter_model.safetensors` is a 16-byte empty stub because **the run trained
+> ZERO LoRA adapters**. The YAML's bare `target_modules: [q_proj, ...]` match
+> NOTHING in NeMo Automodel's `ModuleMatcher` — it compares the FULL dotted
+> module path with an anchored `re.match`, so only wildcard patterns like
+> `*.q_proj` can hit nested modules, and `apply_lora_to_linear_modules`
+> **silently accepts 0 matches**. Evidence: the printed model tree contains no
+> `LinearLoRA` modules (all target projections are plain `nn.Linear`), val_loss
+> is bit-identical (1.6127) at start/mid/end of "training", and the optimizer
+> DCP state is 12.5 MB of metadata-only entries (no param ever received a
+> gradient; activation checkpointing is why `backward()` didn't raise). The
+> earlier `v4_compatible` suspicion was a red herring — that flag only affects
+> config.json format. The checkpoint/save path itself is HEALTHY (CPU-verified:
+> with adapters actually applied, ModelState+FSDP2+ignore_frozen returns all
+> LoRA keys).
+>
+> **Fix (commit follows):** language-scoped wildcards in both SFT YAMLs —
+> `'*.language_model.*.<proj>'`. Scoping matters: Qwen2.5-VL's VISION tower
+> reuses `gate/up/down_proj` names, so unscoped `'*.gate_proj'` would train the
+> vision tower and violate the 0-visual-trainables constraint. 3-way CPU repro:
+> `repro_empty_adapter.py` (bare → 0 modules; unscoped → 1536 visual params
+> leak; scoped → language-only, 12/12 adapter keys survive to the save).
+>
+> **Consequence for the smoke's claims:** the dataloader fix, preflight gate,
+> import-shadowing fix, checkpoint mechanics, and budget tooling are all
+> genuinely proven. The "training" itself was a frozen-model no-op — a
+> few-step paid re-run with the fixed YAML is REQUIRED to prove adapters
+> train and export (expect: `LinearLoRA` in the model tree, val_loss moves,
+> adapter file ~60 MB).
 
 ## Scope
 

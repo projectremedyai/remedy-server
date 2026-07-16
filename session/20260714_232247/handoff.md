@@ -9,14 +9,25 @@ dataloader blocker is DEAD in production conditions. Artifacts (SHA-verified,
 copied BEFORE stop): `session/20260714_232247/remote_artifacts/qwen25_sft_smoke2/`.
 Details: `qwen25_sft_smoke2_20260716.md`. Spend: $11.0386 conservative local.
 
-**BUT the retrieved `adapter_model.safetensors` is a 16-byte EMPTY stub** —
-NeMo's consolidated LoRA save wrote no weights (trainer warning names an
-experimental `v4_compatible` flag). Training was real (consumed_samples=224,
-val_loss 1.6127). NEW small blocker: diagnose NeMo's consolidated save path
-at the pin ($0, source read + maybe local repro) before any re-run; the
-validating re-run can be a few steps, not a full smoke. Plain `peft
-save_pretrained` is PROVEN working on this stack (2026-07-15 compat spike) —
-worst case, patch the save to use it.
+**BUT the adapter was EMPTY — root cause found and fixed the same evening ($0):**
+the smoke trained **ZERO LoRA adapters**. Bare `target_modules: [q_proj, ...]`
+match NOTHING in NeMo Automodel's ModuleMatcher (anchored `re.match` on the
+FULL dotted path; `apply_lora_to_linear_modules` silently accepts 0 matches).
+Proof: no `LinearLoRA` in the printed model tree, val_loss bit-identical
+(1.6127) at start/mid/end, 12.5 MB metadata-only optimizer state. The
+`v4_compatible` warning was a red herring (config.json format only); the save
+path itself is healthy once adapters exist (CPU-verified end to end).
+**Fix shipped:** `'*.language_model.*.<proj>'` wildcards in both SFT YAMLs —
+language-scoped because Qwen2.5-VL's VISION tower reuses gate/up/down_proj
+names and unscoped wildcards would train it. Pinned by two tests; 3-way CPU
+repro in `session/20260714_232247/repro_empty_adapter.py`.
+**Still owed: a few-step paid re-run** with the fixed YAML to prove adapters
+train + export (grep the log for `LinearLoRA`, expect val_loss to move and a
+~60 MB adapter file). Do NOT start full five-adapter training on an
+unvalidated export.
+**Upstream-worthy findings (not filed):** silent 0-match in
+`apply_lora_to_linear_modules`, and the empty-dict PEFT save writing a
+16-byte safetensors without warning.
 
 **The preflight gate caught a second latent defect on its first live run:** the
 official image imports its own baked NeMo RL at `/opt/nemo-rl`, which shadows

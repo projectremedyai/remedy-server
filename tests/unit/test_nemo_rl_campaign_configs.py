@@ -55,14 +55,17 @@ def test_sft_recipes_have_identical_five_adapter_hyperparameters() -> None:
         assert lora["dim"] == 16
         assert lora["alpha"] == 32
         assert lora["dropout"] == 0.0
+        # Language-scoped wildcards: bare names silently match nothing in
+        # NeMo Automodel's ModuleMatcher (anchored re.match on the full dotted
+        # path), and unscoped wildcards would train the vision tower.
         assert set(lora["target_modules"]) == {
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
+            "*.language_model.*.q_proj",
+            "*.language_model.*.k_proj",
+            "*.language_model.*.v_proj",
+            "*.language_model.*.o_proj",
+            "*.language_model.*.gate_proj",
+            "*.language_model.*.up_proj",
+            "*.language_model.*.down_proj",
         }
         assert lora["exclude_modules"] == []
         assert lora["match_all_linear"] is False

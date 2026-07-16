@@ -94,6 +94,35 @@ def test_row_failures_requires_text_only_when_snippet_given() -> None:
     assert row_failures(text_only, image_count=0, must_contain=None) == []
 
 
+def test_lora_target_modules_are_language_scoped_wildcards() -> None:
+    """Bare module names like "q_proj" silently match NOTHING in NeMo
+    Automodel's ModuleMatcher: it compares the FULL dotted path with an
+    anchored re.match, so only wildcard patterns can hit nested modules.
+    The 2026-07-16 smoke trained for 28 steps with ZERO LoRA modules applied
+    (val_loss frozen at 1.6127, adapter file empty) because of this.
+
+    Patterns must also be scoped to the language model: Qwen2.5-VL's VISION
+    tower reuses gate/up/down_proj names, and unscoped '*.gate_proj' would
+    train it — violating the campaign's 0-visual-trainables constraint."""
+    import yaml
+
+    for config_name in ("sft_qwen25_vl_3b_h200.yaml", "sft_qwen35_9b_h200.yaml"):
+        config = yaml.safe_load(
+            (ROOT / "tools/finetune/nemo_rl_configs" / config_name).read_text(
+                encoding="utf-8"
+            )
+        )
+        targets = config["policy"]["dtensor_cfg"]["lora_cfg"]["target_modules"]
+        assert targets, f"{config_name}: empty target_modules"
+        for pattern in targets:
+            assert pattern.startswith("*.language_model."), (
+                f"{config_name}: target module {pattern!r} must be a "
+                "language-scoped wildcard ('*.language_model.*.<proj>') — "
+                "bare names match nothing and unscoped wildcards hit the "
+                "vision tower"
+            )
+
+
 def test_preflight_command_gates_the_same_task_and_config() -> None:
     command, environment = build_preflight_command(
         task="contrast",
