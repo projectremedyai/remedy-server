@@ -283,3 +283,24 @@ def test_run_sft_aborts_when_preflight_fails(tmp_path, monkeypatch) -> None:
         "-m",
         "tools.finetune.remedy_nemo_rl.dataloader_preflight",
     ]
+
+
+def test_length_filter_partitions_and_recounts() -> None:
+    """Overlong rows must be dropped at BUILD time: runtime truncation of
+    multimodal rows violates NeMo's uniform-batch invariants layer after
+    layer (forward feature mismatch -> collation NoneType -> BatchedDataDict
+    size assertion, all hit live 2026-07-16). Every shipped row must fit."""
+    from tools.finetune.filter_overlong_sft_rows import partition_rows, recount
+
+    rows = [
+        {"verifier_target": {"issues": []}, "meta": {"task": "contrast"}},
+        {"verifier_target": {"issues": [{"kind": "low"}]}, "meta": {"task": "contrast"}},
+        {"verifier_target": {"issues": []}, "meta": {"task": "contrast"}},
+    ]
+    kept, dropped = partition_rows(rows, [100, 9000, 200], max_tokens=8128)
+    assert len(kept) == 2
+    assert dropped == [(1, 9000)]
+    counts = recount(kept, "contrast")
+    assert counts["total"] == 2
+    assert counts["pass"] == 2
+    assert counts["fail"] == 0
