@@ -26,3 +26,16 @@ def test_sft_command_is_single_gpu_and_uses_task_specific_paths() -> None:
     assert environment["REMEDY_SFT_TRAIN"].endswith("/sft/contrast/train.jsonl")
     assert environment["REMEDY_CHECKPOINT_DIR"].endswith("/sft/target/contrast")
     assert environment["PYTHONPATH"] == "/home/ubuntu/workspace/remedy-server"
+
+
+def test_sft_command_accepts_extra_config_overrides() -> None:
+    """heading_hierarchy needs sft.val_period=50: at the default val_period=20
+    its 292-step run would spend ~1h of GPU on 14 mid-run validations."""
+    command, _ = build_sft_command(
+        task="heading_hierarchy",
+        model_role="control",
+        dataset_root=Path("/ephemeral/nemo-rl/datasets"),
+        train_count=1167,
+        overrides=("sft.val_period=50",),
+    )
+    assert command[-1] == "sft.val_period=50"

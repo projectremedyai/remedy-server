@@ -38,6 +38,7 @@ def build_sft_command(
     model_role: str,
     dataset_root: Path,
     train_count: int,
+    overrides: tuple[str, ...] = (),
 ) -> tuple[list[str], dict[str, str]]:
     """Construct one task-specific, one-GPU SFT command and environment."""
 
@@ -56,6 +57,7 @@ def build_sft_command(
         "cluster.num_nodes=1",
         f"policy.scheduler.0.kwargs.total_iters={warmup}",
         f"policy.scheduler.2.milestones=[{warmup}]",
+        *overrides,
     ]
     environment = {
         "PYTHONPATH": "/home/ubuntu/workspace/remedy-server",
@@ -141,6 +143,7 @@ def _run_sft(args: argparse.Namespace) -> int:
         model_role=args.model_role,
         dataset_root=args.dataset_root,
         train_count=count,
+        overrides=tuple(getattr(args, "override", None) or ()),
     )
     task_root = args.dataset_root / "sft" / args.task
     for split in ("train", "validation"):
@@ -195,6 +198,11 @@ def main() -> int:
     sft.add_argument("--dataset-root", type=Path, default=Path("/ephemeral/nemo-rl/datasets"))
     sft.add_argument("--task", choices=TASKS_BY_PAID_PRIORITY, required=True)
     sft.add_argument("--model-role", choices=tuple(MODEL_CONFIGS), default="target")
+    sft.add_argument(
+        "--override",
+        action="append",
+        help="extra config override appended to the training command (repeatable)",
+    )
 
     args = parser.parse_args()
     if args.command == "plan":
