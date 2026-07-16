@@ -1,0 +1,10 @@
+{
+  "base_model_name_or_path": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "bias": "none",
+  "lora_alpha": 32,
+  "peft_type": "LORA",
+  "r": 16,
+  "target_modules": [],
+  "task_type": "CAUSAL_LM",
+  "use_dora": false
+}

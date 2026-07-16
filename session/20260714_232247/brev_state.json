@@ -59,7 +59,15 @@
       "outcome": "stopped",
       "started_at": "2026-07-15T18:45:07.004128+00:00",
       "stopped_at": "2026-07-15T19:13:26.414263+00:00"
+    },
+    {
+      "cost_usd": 1.0673,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-sft-smoke2-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-16T17:39:58.038137+00:00",
+      "stopped_at": "2026-07-16T18:12:18.539061+00:00"
     }
   ],
-  "recorded_spend_usd": 9.9713
+  "recorded_spend_usd": 11.0386
 }

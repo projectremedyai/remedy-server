@@ -1,6 +1,38 @@
 # Handoff
 
-## 2026-07-16 update — the SFT dataloader blocker is FIXED (locally, $0)
+## 2026-07-16 evening — SMOKE: pipeline SUCCEEDED end-to-end; adapter EXPORT defective
+
+`remedy-qwen25-sft-smoke2-20260716` (A100, $1.07) ran `campaign sft --task
+contrast --model-role control` end to end on payload `98ad504`: preflight
+passed both splits, 28 steps / 2 epochs, val at start+end, exit 0. The
+dataloader blocker is DEAD in production conditions. Artifacts (SHA-verified,
+copied BEFORE stop): `session/20260714_232247/remote_artifacts/qwen25_sft_smoke2/`.
+Details: `qwen25_sft_smoke2_20260716.md`. Spend: $11.0386 conservative local.
+
+**BUT the retrieved `adapter_model.safetensors` is a 16-byte EMPTY stub** —
+NeMo's consolidated LoRA save wrote no weights (trainer warning names an
+experimental `v4_compatible` flag). Training was real (consumed_samples=224,
+val_loss 1.6127). NEW small blocker: diagnose NeMo's consolidated save path
+at the pin ($0, source read + maybe local repro) before any re-run; the
+validating re-run can be a few steps, not a full smoke. Plain `peft
+save_pretrained` is PROVEN working on this stack (2026-07-15 compat spike) —
+worst case, patch the save to use it.
+
+**The preflight gate caught a second latent defect on its first live run:** the
+official image imports its own baked NeMo RL at `/opt/nemo-rl`, which shadows
+the pinned+patched clone (yesterday's smoke ran the baked copy too). Fixes now
+in `brev_setup.sh` (nemo_rl symlink through the payload dir + `/opt/nemo-rl/3rdparty`
+symlink for Megatron + a `patched_nemo_rl_import_ok` assert). Never put the RL
+repo ROOT on PYTHONPATH — NeMo's `tools/` regular package shadows our `tools/`
+namespace package.
+
+**Next:** the five-adapter SFT campaign is unblocked — remaining tasks
+(`table_structure`, `alt_text_quality`, `reading_order`, `heading_hierarchy`)
+use the same launch pattern, ~$39 of headroom to the $50 stop. The smoke
+proves the PIPELINE, not the model: run the evaluation gates on the contrast
+adapter before believing it.
+
+## 2026-07-16 morning — the SFT dataloader blocker is FIXED (locally, $0)
 
 The `IndexError: index 1 is out of bounds for dimension 0 with size 1` in Qwen2.5-VL
 `image_grid_thw` is root-caused, reproduced on a Mac CPU, and fixed:

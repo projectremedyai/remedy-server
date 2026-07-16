@@ -60,6 +60,21 @@ def test_brev_setup_applies_the_patch_idempotently() -> None:
     assert text.index("_content.patch") < text.index("nemo_rl_and_gym_import_ok")
 
 
+def test_brev_setup_exposes_patched_clone_over_baked_image_copy() -> None:
+    """The official image bakes its own nemo_rl at /opt/nemo-rl, which shadows
+    the pinned+patched clone at import time (proven on the 2026-07-16 paid
+    smoke: preflight crashed identically because /opt/nemo-rl has no patch).
+    Setup must symlink the clone's nemo_rl package into the payload dir, which
+    is first on the container PYTHONPATH. The RL repo ROOT must never go on
+    PYTHONPATH: its tools/ is a regular package and would shadow this repo's
+    tools/ namespace package."""
+    setup_text = SETUP.read_text(encoding="utf-8")
+    assert "ln -sfn /home/ubuntu/RL/nemo_rl /home/ubuntu/workspace/remedy-server/nemo_rl" in setup_text
+    run_text = (ROOT / "tools/finetune/brev_vm_container_run.sh").read_text(encoding="utf-8")
+    assert "PYTHONPATH=/home/ubuntu/workspace/remedy-server" in run_text
+    assert "PYTHONPATH=/home/ubuntu/RL" not in run_text
+
+
 def test_row_failures_flags_placeholder_desync_and_dropped_text() -> None:
     corrupted = VISION_BLOCK * 2  # phantom-key rendering: text part became an image
     failures = row_failures(

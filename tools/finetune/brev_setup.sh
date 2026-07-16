@@ -37,6 +37,30 @@ else
   echo "strip-none multimodal patch applied"
 fi
 
+# The official image bakes its own nemo_rl copy at /opt/nemo-rl, which shadows
+# the pinned+patched clone at import time (proven on the 2026-07-16 smoke:
+# the first preflight crashed because /opt/nemo-rl carries no patch). Expose
+# the clone's nemo_rl package through the payload dir, which is first on the
+# container PYTHONPATH. Do NOT put the RL repo root on PYTHONPATH instead:
+# its tools/ is a regular package and shadows this repo's tools/ namespace.
+ln -sfn /home/ubuntu/RL/nemo_rl /home/ubuntu/workspace/remedy-server/nemo_rl
+# nemo_rl/__init__.py injects Megatron-LM from <parent-of-package>/3rdparty/…,
+# which now resolves relative to the payload dir. The shallow clone has no
+# submodules; borrow the image's baked copy (path is only valid in-container,
+# which is fine — symlinks resolve lazily).
+ln -sfn /opt/nemo-rl/3rdparty /home/ubuntu/workspace/remedy-server/3rdparty
+"$python_bin" - <<'PYEOF'
+import inspect
+import nemo_rl.data.processors as processors
+
+source = inspect.getsource(processors.sft_processor)
+assert "if v is not None" in source, (
+    "imported nemo_rl.data.processors is missing the strip-none patch: "
+    + processors.__file__
+)
+print("patched_nemo_rl_import_ok: " + processors.__file__)
+PYEOF
+
 git -C /home/ubuntu/Gym fetch --depth 1 origin 25d471edfc6db9d783b31140a4e10e6194455f71
 git -C /home/ubuntu/Gym checkout --detach 25d471edfc6db9d783b31140a4e10e6194455f71
 "$python_bin" -m pip install --no-deps -e /home/ubuntu/Gym

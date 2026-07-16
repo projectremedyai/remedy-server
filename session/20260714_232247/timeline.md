@@ -117,3 +117,18 @@
 - TDD: `tests/unit/test_nemo_rl_vlm_dataloader_fix.py` written first (8 tests: patch placement, idempotent setup hook, preflight row checks, preflight-before-training ordering, abort-on-preflight-failure). Full suite after: 359 passed, 1 skipped; shell syntax and py_compile clean.
 - Recorded experiments 21 (root cause + repro) and 22 (fix + gate) in `experiments.tsv`; campaign spend unchanged at $9.9713 conservative local / $7.28 last authoritative provider view.
 - Qwen3.5-9B stays parked with an explicit memory-strategy decision note in the handoff; GRPO-stage loaders flagged for the same datasets None-padding trap.
+
+## 2026-07-16 12:05:00 PDT
+- User authorized the branch push and the paid SFT smoke rerun ("yes to both").
+- Pushed `codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving` to origin (commit `98ad504`).
+- Launched `remedy-qwen25-sft-smoke2-20260716` (a100-80gb.1x, $1.98/hr, 1.5h watchdog) after `brev ls` showed no instances. Payload `98ad504` uploaded and SHA-verified; setup applied the strip-None patch to the pinned clone.
+- The dataloader preflight gate CAUGHT a second latent defect on attempt 1: the official image imports its own baked NeMo RL at `/opt/nemo-rl`, shadowing the pinned+patched clone. Training never started; the defect cost a log line instead of a training window — the gate's exact design purpose.
+- Fixed import resolution live: symlinked the clone's `nemo_rl` into the payload dir (PYTHONPATH-first) and `/opt/nemo-rl/3rdparty` for Megatron; rejected putting the RL repo root on PYTHONPATH (NeMo's `tools/` regular package shadows our `tools/` namespace package). All fixes mirrored into `brev_setup.sh` with a `patched_nemo_rl_import_ok` assert, plus a pinning unit test.
+- Preflight then PASSED both splits and the SFT smoke ran end to end: 28 steps / 2 epochs at ~18.7s/step, loss ~1.42–1.50, validation at start and end, checkpoint `step_28` with `adapter_model.safetensors`, `SFT_EXIT_CODE=0`. FIRST CAMPAIGN CHECKPOINT.
+- Artifacts SHA-verified and copied BEFORE stop to `session/20260714_232247/remote_artifacts/qwen25_sft_smoke2/` (26 MB). Guarded stop recorded $1.0673 (window ~17:39–18:57Z); cumulative conservative local spend $11.0386. Delete requested; `brev ls` convergence being polled.
+- Suite after all changes: 360 passed, 1 skipped.
+
+## 2026-07-16 12:20:00 PDT
+- Post-retrieval audit caught that `step_28/policy/weights/model/adapter_model.safetensors` is a 16-byte EMPTY stub: NeMo's consolidated LoRA save wrote no weights (trainer warned `save_consolidated=True but v4_compatible=False`). Training itself was real (consumed_samples=224, end val_loss 1.6127).
+- Corrected the smoke record from "first checkpoint" to "pipeline proven, adapter export defective". New small blocker: diagnose NeMo's consolidated save path at the pin at $0 before any re-run; a validating re-run needs only a few steps. Plain `peft save_pretrained` is proven working on this stack (2026-07-15 compat spike) as the fallback.
+- VM stopped ($1.0673 recorded, $11.0386 cumulative); delete requested, `brev ls` convergence being polled.

@@ -10,7 +10,7 @@
 Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
 
 ## Current Subtask
-The `image_grid_thw` SFT dataloader blocker is ROOT-CAUSED, REPRODUCED, and FIXED locally at $0 (2026-07-16). Next paid action, when authorized: rerun the low-cost Qwen2.5 SFT smoke — setup now applies the strip-None patch and the campaign launcher preflights the real dataloader path before training starts.
+SMOKE 2026-07-16 (~$1.07): the training PIPELINE is proven end to end (preflight passed, 28 steps/2 epochs, val at start+end, exit 0 — dataloader blocker DEAD in production), and the preflight gate caught+fixed a second latent defect live (/opt/nemo-rl import shadowing). HOWEVER the retrieved adapter_model.safetensors is a 16-byte EMPTY stub — NeMo consolidated LoRA save wrote no weights. Next: $0 source diagnosis of the save path (v4_compatible flag?) then a few-step re-run to validate the export. Spend: $11.0386 conservative local, ~$39 headroom.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
