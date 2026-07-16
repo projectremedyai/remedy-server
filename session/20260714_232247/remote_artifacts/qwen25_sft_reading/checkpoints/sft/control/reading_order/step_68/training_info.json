@@ -1,0 +1,1 @@
+{"epoch": 1, "step": 0, "total_steps": 68, "consumed_samples": 544, "total_valid_tokens": 60787.0, "val:val_loss": 0.019282836467027664}
