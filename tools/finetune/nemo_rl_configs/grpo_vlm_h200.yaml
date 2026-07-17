@@ -105,6 +105,16 @@ data:
 env:
   should_use_nemo_gym: true
   nemo_gym:
+    # run_vlm_grpo.py at pin c339070 constructs a VLMEnvironment for every
+    # env_name BEFORE gym mode takes over rollouts (data/utils.py:
+    # registered_env_name = "vlm" if is_vlm). The constructor demands
+    # num_workers and a non-empty reward_functions list (KeyError/'No reward
+    # functions provided' otherwise - cost a $2.73 window to discover). In
+    # gym mode these workers sit idle; keep them minimal.
+    num_workers: 1
+    reward_functions:
+      - name: format
+        weight: 1.0
     config_paths:
       - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
       - resources_servers/remedy_pdf/configs/remedy_pdf.yaml
