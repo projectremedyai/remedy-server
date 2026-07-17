@@ -149,3 +149,10 @@
 - Windows: A $4.1767 (two failed attempts + two adapters), B $1.7683 (reading_order clean first try), C $5.8744 (heading, 237 steps, checkpoint_must_save_by closed the run cleanly; adapter retrieved 3 minutes before the watchdog).
 - Campaign spend: $23.7687 conservative local of the $50 cap. All boxes stopped+delete requested. Commits pushed through dded267 (+ final docs commit).
 - NEXT MILESTONE: evaluation gates - score all five adapters against the frozen baselines (eval harness + promotion evaluator already in tools/finetune), then vLLM serving probes with the trained adapters, then GRPO stage decision (Gym corpus was never transferred). The smoke-level val losses prove LEARNING, not production quality: zero-false-positive promotion constraint still ungated.
+
+## 2026-07-16 20:45:00 PDT
+- Ran the eval phase per the NVIDIA autoresearch workflow: 778 greedy generations (base vs adapter, five test splits, training-faithful max_pixels) on one A100 window ($2.687), scored locally with the campaign's evaluation.py promotion gates.
+- Preflight before renting: sft<->gym test example_ids match 389/389; adapter format verified as genuine HF PEFT (504 keys, base_model.model.* naming, fp32) loadable by PeftModel.
+- VERDICT: **table_structure PROMOTED** (perfect 1.000 across every gate). Four adapters beat base massively but fail gates, each with a distinct error signature: contrast collapsed to always-fail (near-threshold 100% is vacuous); reading_order collapsed to always-pass (missed 29/30 gold fails); alt_text_quality genuinely close (0.883 vs 0.90, 6 real-pass FPs, 1 invalid JSON); heading_hierarchy perfect on synthetic (118/118) but misses 26/35 REAL fails - the synthetic/real domain gap again.
+- Next hypotheses recorded in handoff: GRPO with the FP-penalizing deterministic reward for alt_text + heading (closest to gates, verifier already penalizes exactly what fails); more REAL fail examples for heading; contrast/reading_order need task-input redesign (numeric contrast ratios / structural hints in prompt), not more epochs.
+- Ledger $26.4557 of $50. Eval box stopped+delete requested.

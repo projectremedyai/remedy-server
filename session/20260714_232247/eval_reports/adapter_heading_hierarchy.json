@@ -1,0 +1,26 @@
+{
+  "dataset": "tools/finetune/generated/nemo_campaign_dataset/gym/heading_hierarchy/test.jsonl",
+  "predictions": "session/20260714_232247/remote_artifacts/qwen25_eval/eval/preds_adapter_heading_hierarchy.jsonl",
+  "promotion": {
+    "heading_hierarchy": {
+      "checks": {
+        "exact_correction_accuracy": false,
+        "real_pass_false_positives": false,
+        "status_accuracy": false,
+        "valid_json": false
+      },
+      "passed": false
+    }
+  },
+  "tasks": {
+    "heading_hierarchy": {
+      "mean_reward": 0.8462519936204147,
+      "near_threshold_accuracy": null,
+      "real_pass_false_positives": 1,
+      "status_accuracy": 0.8660287081339713,
+      "structured_exact_accuracy": 0.6808510638297872,
+      "total": 209,
+      "valid_json": 0.9952153110047847
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "dataset": "tools/finetune/generated/nemo_campaign_dataset/gym/contrast/test.jsonl",
+  "predictions": "session/20260714_232247/remote_artifacts/qwen25_eval/eval/preds_adapter_contrast.jsonl",
+  "promotion": {
+    "contrast": {
+      "checks": {
+        "near_threshold_accuracy": true,
+        "real_pass_false_positives": true,
+        "status_accuracy": false,
+        "valid_json": true
+      },
+      "passed": false
+    }
+  },
+  "tasks": {
+    "contrast": {
+      "mean_reward": 0.035185185185185236,
+      "near_threshold_accuracy": 1.0,
+      "real_pass_false_positives": 0,
+      "status_accuracy": 0.5416666666666666,
+      "structured_exact_accuracy": 0.0,
+      "total": 24,
+      "valid_json": 1.0
+    }
+  }
+}
