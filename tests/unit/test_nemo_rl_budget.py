@@ -50,3 +50,13 @@ def test_projected_run_cannot_consume_ten_dollar_reserve() -> None:
             requested_hours=2.0,
             gpu_count=1,
         )
+
+
+def test_reserve_override_moves_the_no_new_work_line_consistently() -> None:
+    """User-authorized one-time reserve dip (2026-07-17): the policy invariant
+    no_new_work == hard_limit - reserve must hold for overridden reserves too."""
+    from tools.finetune.remedy_nemo_rl.budget import BudgetPolicy
+
+    policy = BudgetPolicy(reserve_usd=7.0, no_new_work_usd=43.0)
+    assert policy.hard_limit_usd == 50.0
+    assert policy.no_new_work_usd == 43.0

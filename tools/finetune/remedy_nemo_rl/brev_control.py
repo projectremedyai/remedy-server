@@ -191,7 +191,14 @@ def _launch(args: argparse.Namespace) -> int:
     if state.active_instance:
         raise SystemExit(f"campaign already has active instance {state.active_instance}")
     decision = authorize_launch(
-        policy=BudgetPolicy(),
+        policy=(
+            BudgetPolicy(
+                reserve_usd=args.reserve_override_usd,
+                no_new_work_usd=BudgetPolicy.hard_limit_usd - args.reserve_override_usd,
+            )
+            if getattr(args, "reserve_override_usd", None) is not None
+            else BudgetPolicy()
+        ),
         recorded_spend_usd=state.recorded_spend_usd,
         hourly_rate_usd=args.hourly_rate,
         requested_hours=args.hours,
@@ -296,6 +303,16 @@ def main() -> int:
     launch.add_argument("--mode", choices=("container", "vm"), default="container")
     launch.add_argument("--hours", type=float, default=3.0)
     launch.add_argument("--startup-script", type=Path, required=True)
+    launch.add_argument(
+        "--reserve-override-usd",
+        type=float,
+        default=None,
+        help=(
+            "USER-AUTHORIZED one-time reserve reduction. Lowers reserve_usd and "
+            "raises no_new_work_usd consistently. Record the authorization in "
+            "the session ledger when using this."
+        ),
+    )
     launch.add_argument("--execute", action="store_true")
     launch.set_defaults(handler=_launch)
 
