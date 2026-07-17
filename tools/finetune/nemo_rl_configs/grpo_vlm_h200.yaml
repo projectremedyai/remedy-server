@@ -9,7 +9,7 @@ grpo:
   val_period: 5
   val_at_start: true
   val_at_end: true
-  max_val_samples: null
+  max_val_samples: 58
   seed: 20260714
 
 checkpointing:

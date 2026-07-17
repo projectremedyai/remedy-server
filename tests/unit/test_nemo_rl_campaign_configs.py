@@ -95,6 +95,9 @@ def test_grpo_recipe_uses_nemo_gym_and_approved_limits() -> None:
     assert recipe["env"]["should_use_nemo_gym"] is True
     # VLMEnvironment is constructed even in gym mode and hard-fails without
     # these keys (proven live, 2026-07-17).
+    # validate() computes max_val_samples // val_batch_size; null TypeErrors
+    # at validation-at-start (proven live, attempt 3).
+    assert isinstance(recipe["grpo"]["max_val_samples"], int)
     assert recipe["env"]["nemo_gym"]["num_workers"] == 1
     assert recipe["env"]["nemo_gym"]["reward_functions"]
     assert recipe["cluster"] == {"gpus_per_node": 1, "num_nodes": 1}
