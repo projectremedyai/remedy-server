@@ -10,7 +10,7 @@
 Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
 
 ## Current Subtask
-SMOKE 2026-07-16 (~$1.07): dataloader fix, preflight gate, /opt-import fix, checkpoint mechanics all PROVEN — but the run trained ZERO adapters: bare target_modules match nothing in Automodel ModuleMatcher (silent 0-match; val_loss frozen 1.6127; empty adapter). FIXED at $0: language-scoped wildcards *.language_model.*.<proj> in both SFT YAMLs (vision tower reuses proj names — unscoped would train it). Suite 361 green. NEXT: few-step paid re-run to prove adapters train+export (grep LinearLoRA, val moves, ~60MB adapter) BEFORE full five-adapter training. Spend $11.0386, ~$39 headroom.
+ALL FIVE CONTROL ADAPTERS TRAINED 2026-07-16 night (contrast 0.0593 / table 0.0310 / alt_text 0.1278 / reading 0.0193 / heading 0.0105 final val; each 119,809,056 bytes, SHA-verified locally). Campaign spend $23.7687 of $50. Six stack defects fixed en route (3 NeMo patches + import shims + language-scoped LoRA targets + build-time length filter). NEXT: evaluation gates against frozen baselines (zero-false-positive promotion constraint), then vLLM serving probes with adapters, then GRPO decision. Qwen3.5 target still parked (OOM).
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.

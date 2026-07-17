@@ -1,6 +1,40 @@
 # Handoff
 
-## 2026-07-16 evening — SMOKE: pipeline SUCCEEDED end-to-end; adapter EXPORT defective
+## 2026-07-16 night — ALL FIVE CONTROL ADAPTERS TRAINED ($23.77 of $50)
+
+Qwen2.5-VL-3B rank-16 language-scoped LoRA, one adapter per task, all exported
+and SHA-verified locally under `session/20260714_232247/remote_artifacts/`:
+
+| task | final val loss | checkpoint |
+|---|---|---|
+| contrast | 1.6127 → 0.0593 | qwen25_sft_validate/.../step_28 |
+| table_structure | → 0.0310 | qwen25_sft_batch2/.../step_56 |
+| alt_text_quality | → 0.1278 | qwen25_sft_batch2/.../step_60 |
+| reading_order | → 0.0193 | qwen25_sft_reading/.../step_68 |
+| heading_hierarchy | → 0.0105 | qwen25_sft_heading/step_237_weights |
+
+Every adapter is exactly 119,809,056 bytes (29.9M fp32 LoRA params). Adapter
+binaries are NOT in git (>100MiB GitHub limit) — they live on this Mac with
+committed SHA256SUMS; push them to the HF org before relying on them elsewhere.
+
+**Six latent stack defects were found and fixed on the way** (each by TDD, all
+pushed): datasets None-padding (patch 1), /opt/nemo-rl import shadowing
+(brev_setup symlinks + assert), silent zero-match bare target_modules
+(language-scoped wildcards), truncation keeping media (patch 2), media-less
+collation crash + first-row dispatch bug (patch 3), and the architectural fix:
+`filter_overlong_sft_rows.py` drops rows that cannot fit the 8192 context at
+BUILD time (48/~2600 dropped; worst row 41,321 tokens). The dataloader
+preflight now probes longest rows and mixed-batch collation before any paid
+training starts.
+
+**NEXT MILESTONE — evaluation gates, not more training:** the val losses prove
+learning, not production quality. Run the eval harness + promotion evaluator
+(already in tools/finetune) over all five adapters against frozen baselines;
+zero-false-positive on real pass pages remains the hard promotion constraint.
+Then vLLM serving probes with adapters loaded, then the GRPO decision (the
+2.9GB Gym corpus was never transferred). Qwen3.5-9B target remains parked (OOM).
+
+## 2026-07-16 evening — SMOKE: pipeline SUCCEEDED end-to-end; adapter EXPORT defective (superseded — root-caused below, fixed same night)
 
 `remedy-qwen25-sft-smoke2-20260716` (A100, $1.07) ran `campaign sft --task
 contrast --model-role control` end to end on payload `98ad504`: preflight

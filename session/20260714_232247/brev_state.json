@@ -1,8 +1,8 @@
 {
-  "active_deadline": "2026-07-16T22:03:34.895402+00:00",
-  "active_hourly_rate_usd": 1.98,
-  "active_instance": "remedy-qwen25-sft-batch2-20260716",
-  "active_started_at": "2026-07-16T19:33:34.895402+00:00",
+  "active_deadline": null,
+  "active_hourly_rate_usd": null,
+  "active_instance": null,
+  "active_started_at": null,
   "history": [
     {
       "cost_usd": 0.0929,
@@ -75,7 +75,31 @@
       "outcome": "stopped",
       "started_at": "2026-07-16T18:58:22.926762+00:00",
       "stopped_at": "2026-07-16T19:25:58.728500+00:00"
+    },
+    {
+      "cost_usd": 4.1767,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-sft-batch2-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-16T19:33:34.895402+00:00",
+      "stopped_at": "2026-07-16T21:40:08.864513+00:00"
+    },
+    {
+      "cost_usd": 1.7683,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-sft-reading-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-16T21:41:52.912542+00:00",
+      "stopped_at": "2026-07-16T22:35:27.958271+00:00"
+    },
+    {
+      "cost_usd": 5.8744,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-sft-heading-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-16T22:37:00.710218+00:00",
+      "stopped_at": "2026-07-17T01:35:01.506123+00:00"
     }
   ],
-  "recorded_spend_usd": 11.9493
+  "recorded_spend_usd": 23.7687
 }
