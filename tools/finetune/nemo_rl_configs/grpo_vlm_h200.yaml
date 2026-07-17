@@ -25,7 +25,8 @@ policy:
   train_global_batch_size: 32
   train_micro_batch_size: 1
   logprob_batch_size: 1
-  max_total_sequence_length: 4096
+  # 8192: alt_text/table rows measure up to 6.5k-17k tokens; 4096 truncates.
+  max_total_sequence_length: 8192
   precision: bfloat16
   dtensor_cfg:
     _v2: true
@@ -37,7 +38,16 @@ policy:
       force_hf: true
     lora_cfg:
       enabled: true
-      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+      # Language-scoped WILDCARDS (bare names match nothing; unscoped
+      # wildcards would train Qwen2.5-VL's vision tower - proven in SFT).
+      target_modules:
+        - '*.language_model.*.q_proj'
+        - '*.language_model.*.k_proj'
+        - '*.language_model.*.v_proj'
+        - '*.language_model.*.o_proj'
+        - '*.language_model.*.gate_proj'
+        - '*.language_model.*.up_proj'
+        - '*.language_model.*.down_proj'
       exclude_modules: []
       match_all_linear: false
       dim: 16
@@ -67,7 +77,7 @@ policy:
       async_engine: true
       expose_http_server: true
       tensor_parallel_size: 1
-      max_model_len: 4096
+      max_model_len: 8192
       gpu_memory_utilization: 0.55
       skip_tokenizer_init: false
     vllm_kwargs:

@@ -94,6 +94,14 @@ def test_grpo_recipe_uses_nemo_gym_and_approved_limits() -> None:
     assert recipe["data"]["validation"]["dataset_name"] == "NemoGymDataset"
     assert recipe["env"]["should_use_nemo_gym"] is True
     assert recipe["cluster"] == {"gpus_per_node": 1, "num_nodes": 1}
+    # Lessons from the SFT campaign, applied to GRPO before its first run:
+    # bare target_modules silently match NOTHING in Automodel's ModuleMatcher,
+    # and 4096 ctx truncates alt_text/table rows (max measured 6.5k-17k tokens).
+    lora = recipe["policy"]["dtensor_cfg"]["lora_cfg"]
+    for pattern in lora["target_modules"]:
+        assert pattern.startswith("*.language_model."), pattern
+    assert recipe["policy"]["max_total_sequence_length"] == 8192
+    assert recipe["policy"]["generation"]["vllm_cfg"]["max_model_len"] == 8192
 
 
 def test_gym_resource_server_dispatches_one_step_five_task_environment() -> None:
