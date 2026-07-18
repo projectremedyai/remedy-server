@@ -28,6 +28,7 @@
 ## Generated
 - `session/20260714_232247/` - durable campaign state and handoff notes.
 - `session/20260714_232247/datafix_v3_preflight.json` - authoritative green v3 dataset acceptance report.
+- `/tmp/remedy-v3-payload-145e1fa.tar.gz` - v3 Brev payload; SHA-256 `d1757d1dbc7c34dd2c5e332b8f2f67f426fa29f417c7f41663f4cdeac4499e27`.
 - `tools/finetune/generated/nemo_campaign_dataset/` - ignored, content-addressed SFT/Gym corpus and manifest.
 - `session/20260714_232247/dataset_preflight.json` - successful full-corpus acceptance report.
 - `session/20260714_232247/brev_state.json` - reconciled three-attempt cost ledger with no active instance and an estimated $2.3856 total.

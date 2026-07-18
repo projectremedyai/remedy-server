@@ -215,3 +215,18 @@
   passed after implementation. Full unit suite: 378 passed, 1 skipped. Shell syntax,
   Python compilation, and exact launch dry-run passed. Projection: $8.55 run,
   $59.37 cumulative, $0.63 remaining under the hard limit.
+
+## 2026-07-17 22:41:36 PDT
+- Committed the v3 objective-label hypothesis as `19f31a7` and the persistent $60
+  watchdog policy as `145e1fa` on the dedicated datafix-v3 branch. MOVE3 remains
+  untracked and unstaged.
+- Packaged v3 SFT plus 1,456 media files into
+  `/tmp/remedy-v3-payload-145e1fa.tar.gz` (SHA-256
+  `d1757d1dbc7c34dd2c5e332b8f2f67f426fa29f417c7f41663f4cdeac4499e27`). Gym
+  base64 payloads were intentionally excluded from the paid SFT/eval window.
+- The old two-epoch heading run took 175 minutes by itself, so the authorized window
+  will use one complete epoch per fixed task, no validation at start, end validation,
+  and end checkpoint. Expected work: about 21 minutes alt + 88 minutes heading + about
+  22 minutes for 208 adapter-only frozen-test generations, leaving setup, transfer,
+  retrieval, and stop margin inside 171 minutes. This is a real one-epoch experiment,
+  not a smoke; a missed gate is reported as budget-limited evidence and is not extended.

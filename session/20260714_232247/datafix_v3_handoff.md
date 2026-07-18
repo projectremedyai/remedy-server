@@ -1,12 +1,13 @@
 # HANDOFF — alt_text + heading data-fix retrain (v3) — 2026-07-17
 
 **STATUS: v3 data is built, fully preflighted, RETRAIN-READY, and APPROVED. Retrain NOT
-launched yet.** Dedicated branch exists; the controller/watchdog now persists the $60
-hard limit; exact dry-run projects $59.37 from a provider-reconciled $50.82 start.
-Commit/package/recheck `brev ls`, then execute the approved guarded launch.
+launched yet.** Dedicated branch and commits exist; the controller/watchdog now persists
+the $60 hard limit; exact dry-run projects $59.37 from a provider-reconciled $50.82
+start. The SHA-verified v3 payload is packaged. Recheck `brev ls`, then execute the
+approved guarded launch.
 
 Repo: `remedy-server-nemo-rl-brev`, branch
-`codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving`. Continuation of the
+`codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`. Continuation of the
 eval-gate work (commit 7b84f08). User chose **data-first cheap-SFT over GRPO**.
 
 ---
@@ -38,14 +39,18 @@ eval-gate work (commit 7b84f08). User chose **data-first cheap-SFT over GRPO**.
    verified present, 1456 media pngs).
 2. Launch ONE A100 (`a100-80gb.1x`) via the guarded controller; setup = `brev_setup.sh`
    (applies the strip-None patch + import shims). Watchdog ≤3h.
-3. Retrain ONLY the two fixed tasks on the warm box:
+3. Retrain ONLY the two fixed tasks on the warm box, one complete epoch each with start
+   validation disabled and end validation/checkpoint retained so evaluation fits the
+   2.85-hour watchdog:
    `campaign sft --task alt_text_quality` then `campaign sft --task heading_hierarchy`
    (`--dataset-root /ephemeral/nemo-rl/datasets`). The other 3 adapters are unchanged —
    **table_structure is already PROMOTED**; contrast/reading_order are the separate MOVE3
    input-redesign track, NOT retrained here.
-4. Re-run eval gates: 778-style base-vs-adapter generations scored by
+4. Re-run eval gates: 208 adapter generations (63 alt + 145 heading) scored by
    `tools/finetune/remedy_nemo_rl/evaluation.py` on the v3 **test** splits.
    Preflight: adapter is genuine PEFT + example_id alignment + max_pixels=12845056.
+   Base-v2 reports remain the frozen reference; the promotion checks themselves only
+   require complete adapter predictions.
 5. Retrieve adapters + eval_reports BEFORE stop (`retrieve_brev_artifacts.sh`,
    SHA-verify), then STOP the box. Record spend in the ledger + timeline.
 

@@ -4,22 +4,22 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-17 22:34:03 PDT
+- Updated: 2026-07-17 22:41:36 PDT
 
 ## Goal
 Finish the linked LAMC remediation and adapter-training workstreams: preserve the
-398/464 machine-clean PDF deliverable, and validate only adapters that can safely
+ 398/464 machine-clean PDF deliverable, and validate only adapters that can safely
 improve it. Keep Qwen2.5-VL-3B as the measured training path, the existing production
-routes as rollback, and the campaign's hard $50 Brev ceiling unless the user explicitly
-changes it.
+routes as rollback, and enforce the user-approved $60 Brev ceiling.
 
 ## Current Subtask
 Take over the v3 data-fix continuation for `alt_text_quality` and
 `heading_hierarchy`. The missing immutable catalog metadata was restored and the v3
 dataset now passes the authoritative local preflight. No Brev instance exists. Provider
-billing shows the campaign at $50.82. On 2026-07-17 the user approved the exact v3
-experiment plan and raised the hard ceiling to $60. Next: create the dedicated branch,
-commit the hypothesis, update/test the guard for $60, then launch one guarded A100.
+billing shows the campaign at $50.82. The v3 hypothesis and persistent $60 watchdog are
+committed on the dedicated branch, and the payload is SHA-verified. Next: launch one
+guarded A100, train one meaningful epoch of alt text then heading, run the two adapter
+promotion gates, retrieve/SHA-verify all artifacts, and stop.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -28,6 +28,14 @@ commit the hypothesis, update/test the guard for $60, then launch one guarded A1
 - `nemo-rl-brev-etiquette` - keep source small and route checkpoints, caches, logs, and Ray state to `/ephemeral` on Brev.
 
 ## Current Status
+- Time-budgeted run design: `sft.max_num_epochs=1`, `sft.val_at_start=false`,
+  `sft.val_period=1000000`, `sft.val_at_end=true`, and a 1,000,000-step periodic save
+  (the end-of-run checkpoint remains required). This preserves a complete epoch and end
+  validation for each adapter while fitting the 63 alt-text plus 145 heading adapter
+  test generations inside the 2.85-hour watchdog. Promotion scoring is adapter-only;
+  the already-frozen v2 base reports remain context, not a required gate input.
+- Payload archive `/tmp/remedy-v3-payload-145e1fa.tar.gz` is 499 MB and has SHA-256
+  `d1757d1dbc7c34dd2c5e332b8f2f67f426fa29f417c7f41663f4cdeac4499e27`.
 - Dedicated experiment branch created:
   `codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`; unrelated MOVE3 remains
   untracked and unstaged.
