@@ -12,7 +12,8 @@ unambiguous human gold, figures match source<->delivered by visual bbox). The
 target is built in the EXACT production schema (page_alt_text_quality_prompt), so
 a tuned adapter drops into pdf_vision unchanged.
   - source figure alt unchanged in delivered      -> status=pass
-  - delivered gave it a real (different) alt       -> status=fail, suggested_alt_text=<delivered alt>
+  - delivered replaced missing/placeholder alt     -> status=fail, suggested_alt_text=<delivered alt>
+  - delivered merely reworded meaningful source alt -> status=pass
   - delivered artifacted it (no delivered Figure)  -> status=fail, decorative=true, suggested_alt_text=""
 
 heading_hierarchy and reading_order use the same source<->delivered diff idea but
@@ -107,8 +108,33 @@ def _match_delivered(src_entry, delivered_entries, used: set[int]):
     return -1, None
 
 
+# Objective "the alt is deficient" signal. A present, non-trivial source alt that
+# the human merely REWORDED in delivery is NOT a defect — training on those
+# subjective "improved" fails taught the model to flag adequate alt (every eval
+# real_pass false-positive was this `quality/improved` case). Fail only when the
+# source alt is objectively missing / placeholder / generic.
+_PLACEHOLDER_ALTS = {
+    "image", "photo", "photograph", "figure", "fig", "graphic", "picture", "pic",
+    "img", "logo", "icon", "chart", "diagram", "screenshot", "banner", "decorative",
+    "alt text", "placeholder", "untitled",
+}
+_FILENAME_ALT_RE = re.compile(
+    r"(.*\.(png|jpe?g|gif|svg|bmp|tiff?|webp)$)|(^(image|img|figure|fig|pic|graphic)[\s_-]?\d+$)"
+)
+
+
+def _alt_is_placeholder(alt: str) -> bool:
+    """True when a source alt string is objectively deficient (missing/generic)."""
+    a = (alt or "").strip().lower()
+    if len(a) < 5:
+        return True
+    if a in _PLACEHOLDER_ALTS:
+        return True
+    return bool(_FILENAME_ALT_RE.match(a))
+
+
 def _alt_target(src_entries, delivered_entries) -> dict:
-    """Gold {figures:[...]} from the source->delivered alt diff."""
+    """Gold {figures:[...]} from the source->delivered alt diff (objective labels)."""
     figs = []
     used: set[int] = set()
     for s in src_entries:
@@ -133,11 +159,22 @@ def _alt_target(src_entries, delivered_entries) -> dict:
                          "severity": "info", "decorative": False,
                          "issue_type": "", "message": "",
                          "suggested_alt_text": "", "confidence": 1.0})
-        else:
+        elif _alt_is_placeholder(s_alt):
+            # Source alt is objectively deficient (empty/generic/filename) and the
+            # human wrote a real one -> a genuine, non-subjective fail.
             figs.append({"figure_index": s.figure_index, "status": "fail",
                          "severity": "warning", "decorative": False,
-                         "issue_type": "quality", "message": "alt text improved in remediation",
+                         "issue_type": "missing_or_placeholder",
+                         "message": "source alt text is missing or a placeholder",
                          "suggested_alt_text": d_alt, "confidence": 1.0})
+        else:
+            # Source alt is present and non-trivial; a human rewording is not a
+            # defect. Pass (this is the discrimination signal the old "improved"
+            # fail destroyed).
+            figs.append({"figure_index": s.figure_index, "status": "pass",
+                         "severity": "info", "decorative": False,
+                         "issue_type": "", "message": "",
+                         "suggested_alt_text": "", "confidence": 1.0})
     return {"figures": figs}
 
 

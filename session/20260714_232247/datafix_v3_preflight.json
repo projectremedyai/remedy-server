@@ -1,0 +1,15 @@
+{
+  "balance_errors": [],
+  "document_leakage": [],
+  "hash_mismatches": [],
+  "holdout_leaks": [],
+  "missing_holdout_hashes": [],
+  "missing_images": [],
+  "passed": true,
+  "schema_errors": [],
+  "split_documents": {
+    "test": 137,
+    "train": 640,
+    "validation": 139
+  }
+}
