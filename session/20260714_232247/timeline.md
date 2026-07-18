@@ -156,3 +156,62 @@
 - VERDICT: **table_structure PROMOTED** (perfect 1.000 across every gate). Four adapters beat base massively but fail gates, each with a distinct error signature: contrast collapsed to always-fail (near-threshold 100% is vacuous); reading_order collapsed to always-pass (missed 29/30 gold fails); alt_text_quality genuinely close (0.883 vs 0.90, 6 real-pass FPs, 1 invalid JSON); heading_hierarchy perfect on synthetic (118/118) but misses 26/35 REAL fails - the synthetic/real domain gap again.
 - Next hypotheses recorded in handoff: GRPO with the FP-penalizing deterministic reward for alt_text + heading (closest to gates, verifier already penalizes exactly what fails); more REAL fail examples for heading; contrast/reading_order need task-input redesign (numeric contrast ratios / structural hints in prompt), not more epochs.
 - Ledger $26.4557 of $50. Eval box stopped+delete requested.
+
+## 2026-07-17 21:43:31 PDT
+- User asked this agent to take over the linked PDF-remediation and adapter-training
+  workstreams using `nemo-rl-docs`, `nemo-rl-auto-research`,
+  `nemo-rl-brev-etiquette`, and `nemo-rl-session-memory`.
+- Recovered `HANDOFF_20260713.md`, this session's handoff/state/timeline, the v3
+  data-fix handoff, git state, experiment ledger, recipes, evaluator, and budget guards.
+- Verified `brev ls`: no instances in org `johnny-01be29-vebe`; no active billing.
+- Read the NVIDIA Billing dashboard for 2026-07-01 through 2026-07-17: $74.24 org
+  total ($72.75 compute + $1.49 storage), $75.77 current balance. Removing the two
+  parallel-workstream instances (`brevp1sftr2` $16.79 and `brevp1sft20260716r1`
+  $6.63) leaves $50.82 for `remedy-*` campaign instances. This exceeds the explicit
+  $50 hard stop; no paid launch is authorized.
+- Ran the v3 authoritative dataset preflight. All content, split, image, schema,
+  balance, leakage, and recorded dataset-hash checks pass, but the manifest omitted all
+  three immutable catalog holdout hashes, so overall `passed=false`. Focused local
+  campaign tests passed: 30 passed.
+- Decision: repair and revalidate the manifest locally at $0, but do not create a new
+  experiment branch or launch a GPU until the user confirms the plan; a paid launch also
+  requires the user to set a new hard ceiling.
+- Restored the three immutable catalog holdout entries to the ignored v3 manifest only
+  after independently rechecking all source hashes and sizes against the prior accepted
+  manifest. No dataset row or dataset hash changed.
+- Re-ran authoritative preflight: `passed=true`, with zero document leakage, missing
+  images, schema errors, holdout leaks, balance errors, dataset-hash mismatches, or
+  missing holdout hashes. Persisted evidence as `datafix_v3_preflight.json`.
+- Verified 1,456 media files; exact SFT/Gym example-ID alignment for alt text and heading
+  across train/validation/test; alt issue types limited to
+  `missing_or_placeholder`/`decorative`; zero subjective rows; six placeholder spot
+  checks passed. Full unit suite: 368 passed, 1 skipped.
+- Stop condition remains met: provider-derived campaign spend is $50.82/$50. No branch
+  creation, payload packaging, or paid launch was performed.
+
+## 2026-07-17 22:34:03 PDT
+- User explicitly approved the v3 experiment plan and raised the campaign hard ceiling
+  from $50 to $60.
+- Restated scoped plan: dedicated v3 hypothesis branch; provider-reconciled starting
+  spend $50.82; one A100; at most three hours; alt text then heading only; frozen v3
+  test evaluation; retrieve and SHA-verify artifacts before stop. GRPO, MOVE3, Qwen3.5,
+  and the other three adapters remain out of scope.
+- Rechecked `brev ls`: no instances in org `johnny-01be29-vebe`.
+- Pre-branch finding: the controller launch path can override reserve but the detached
+  watchdog still hardcodes the historical $50 policy. Decision: persist the approved
+  hard limit in campaign state and test launch/watch behavior before any paid command.
+- Created branch `codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`; MOVE3 was
+  preserved untracked and unstaged.
+- Added state-persisted `hard_limit_usd`/`reserve_usd` plus explicit
+  `--hard-limit-usd`; launch/start previews now expose the active policy and the detached
+  watchdog reads the persisted hard limit. Added Google-style public function docs and
+  updated the indexed campaign spec; no new docs page was added, so `docs/index.md`
+  required no change.
+- Reconciled campaign state from $38.3907 local to $50.82 provider-derived spend with a
+  $12.4293 explicit adjustment. Stored approved hard limit $60 and reserve $0.60.
+- Live inventory check: stoppable Crusoe `a100-80gb.1x`, 80 GB VRAM, 128 GB disk,
+  advertised $1.98/hour. Guard uses conservative $3.00/hour for 2.85 hours.
+- TDD: new budget/state tests failed first on missing persistent-policy support, then
+  passed after implementation. Full unit suite: 378 passed, 1 skipped. Shell syntax,
+  Python compilation, and exact launch dry-run passed. Projection: $8.55 run,
+  $59.37 cumulative, $0.63 remaining under the hard limit.

@@ -1,5 +1,53 @@
 # Handoff
 
+## 2026-07-17 takeover — v3 approved; guard/branch setup before launch
+
+The authoritative PDF deliverable remains `remedy-server/HANDOFF_20260713.md`
+(398/464 machine-clean). Adapter continuation is
+`session/20260714_232247/datafix_v3_handoff.md`: retrain only
+`alt_text_quality` and `heading_hierarchy`; table structure stays promoted;
+contrast/reading-order remain the separate MOVE3 input-redesign track.
+
+Live recovery: `brev ls` reports no instances. NVIDIA Billing for 2026-07-01 through
+2026-07-17 reports $74.24 total. Excluding the two parallel-workstream instances
+(`brevp1sftr2` $16.79 and `brevp1sft20260716r1` $6.63) leaves **$50.82** for the
+`remedy-*` campaign. The user explicitly approved the v3 experiment and raised the
+campaign hard ceiling to **$60** on 2026-07-17. The scoped authorization is one A100 for
+at most three hours, alt text then heading only, followed by frozen-test evaluation,
+artifact retrieval/SHA verification, and stop.
+
+Dedicated branch is now
+`codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`. The controller/watchdog shares
+the persisted $60 limit; reconciled state starts at $50.82 and uses conservative
+$3/hour × 2.85h with a $0.60 reserve. Exact dry-run projects $59.37 total. Full suite is
+green (378 passed, 1 skipped). Commit the hypothesis, package v3, recheck `brev ls`, then
+execute the already-approved guarded launch.
+
+The v3 manifest omission is repaired at $0: all three catalog paths, hashes, and sizes
+were independently checked and restored, and `datafix_v3_preflight.json` now records
+`passed=true`. The set has 1,456 media files, exact SFT/Gym ID alignment, zero subjective
+alt labels, and the full unit suite passes (368 passed, 1 skipped). v3 is locally
+retrain-ready. Per `nemo-rl-auto-research`, obtain explicit plan confirmation before
+creating the v3 experiment branch. That confirmation is now received. Before launch,
+update and test the controller so the detached watchdog persists the approved $60 hard
+limit instead of its historical $50 default. No paid launch has occurred yet.
+
+## Future direction — MoE-of-LoRA (gated routing over the adapter library)
+
+User raised MoEL (mixture-of-expert LoRA adapters with gated routers: MoLE /
+MixLoRA / X-LoRA / PHATGOOSE-style post-hoc routing). Assessment on record:
+production routing here is ORACLE-labeled (the pipeline always knows the task),
+so vLLM native multi-LoRA serving (per PRD_vlm_multi_lora_serving.md) already
+covers deployment — a learned gate would approximate a label we get for free
+and add a mis-routing failure mode. Where it WOULD earn its keep later:
+(1) cross-task transfer via jointly-trained MoE-LoRA (candidates: the weak
+tasks — though contrast/reading_order failures are input-signal, not capacity);
+(2) label-free "audit this page" endpoints — first experiment should be a
+PHATGOOSE-style POST-HOC gate trained over the five frozen adapters (experts
+untouched, a few GPU-hours); (3) single-artifact deployment. Nothing in pinned
+NeMo RL/Automodel trains gated LoRA-MoE out of the box — custom work. Parked
+as post-campaign research.
+
 ## 2026-07-16 night — ALL FIVE CONTROL ADAPTERS TRAINED ($23.77 of $50)
 
 Qwen2.5-VL-3B rank-16 language-scoped LoRA, one adapter per task, all exported

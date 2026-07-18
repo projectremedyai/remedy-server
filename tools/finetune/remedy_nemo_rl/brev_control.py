@@ -1,4 +1,4 @@
-"""Guarded NVIDIA Brev lifecycle and cost accounting for the $50 campaign."""
+"""Guarded NVIDIA Brev lifecycle and cost accounting for a capped campaign."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ class BrevCampaignState:
     """Durable spend and active-instance state used by the watchdog."""
 
     recorded_spend_usd: float = 0.0
+    hard_limit_usd: float = 50.0
+    reserve_usd: float = 10.0
     active_instance: str | None = None
     active_started_at: str | None = None
     active_hourly_rate_usd: float | None = None
@@ -53,6 +55,32 @@ def save_state(path: Path, state: BrevCampaignState) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(asdict(state), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def build_budget_policy(
+    state: BrevCampaignState,
+    *,
+    hard_limit_usd: float | None = None,
+    reserve_override_usd: float | None = None,
+) -> BudgetPolicy:
+    """Build the policy that launch and watchdog state must share.
+
+    Args:
+        state: Durable campaign state containing the most recently approved limits.
+        hard_limit_usd: Explicit user-approved replacement hard ceiling, if any.
+        reserve_override_usd: Explicit reserve retained below that ceiling, if any.
+
+    Returns:
+        A validated policy whose no-new-work line preserves the reserve invariant.
+    """
+
+    hard_limit = state.hard_limit_usd if hard_limit_usd is None else hard_limit_usd
+    reserve = state.reserve_usd if reserve_override_usd is None else reserve_override_usd
+    return BudgetPolicy(
+        hard_limit_usd=hard_limit,
+        no_new_work_usd=hard_limit - reserve,
+        reserve_usd=reserve,
+    )
 
 
 def active_accrued_cost(state: BrevCampaignState, now: datetime | None = None) -> float:
@@ -190,15 +218,13 @@ def _launch(args: argparse.Namespace) -> int:
     state = load_state(args.state)
     if state.active_instance:
         raise SystemExit(f"campaign already has active instance {state.active_instance}")
+    policy = build_budget_policy(
+        state,
+        hard_limit_usd=args.hard_limit_usd,
+        reserve_override_usd=args.reserve_override_usd,
+    )
     decision = authorize_launch(
-        policy=(
-            BudgetPolicy(
-                reserve_usd=args.reserve_override_usd,
-                no_new_work_usd=BudgetPolicy.hard_limit_usd - args.reserve_override_usd,
-            )
-            if getattr(args, "reserve_override_usd", None) is not None
-            else BudgetPolicy()
-        ),
+        policy=policy,
         recorded_spend_usd=state.recorded_spend_usd,
         hourly_rate_usd=args.hourly_rate,
         requested_hours=args.hours,
@@ -211,7 +237,12 @@ def _launch(args: argparse.Namespace) -> int:
         minimum_disk_gb=args.minimum_disk_gb,
         mode=args.mode,
     )
-    preview = {"command": command, "decision": asdict(decision), "execute": args.execute}
+    preview = {
+        "command": command,
+        "decision": asdict(decision),
+        "execute": args.execute,
+        "policy": asdict(policy),
+    }
     print(json.dumps(preview, indent=2, sort_keys=True))
     if not args.execute:
         return 0
@@ -220,6 +251,8 @@ def _launch(args: argparse.Namespace) -> int:
 
     subprocess.run(command, check=True)
     started_at = _now()
+    state.hard_limit_usd = policy.hard_limit_usd
+    state.reserve_usd = policy.reserve_usd
     state.active_instance = args.instance
     state.active_started_at = started_at.isoformat()
     state.active_hourly_rate_usd = args.hourly_rate
@@ -236,21 +269,33 @@ def _start_existing(args: argparse.Namespace) -> int:
     state = load_state(args.state)
     if state.active_instance:
         raise SystemExit(f"campaign already has active instance {state.active_instance}")
+    policy = build_budget_policy(
+        state,
+        hard_limit_usd=args.hard_limit_usd,
+        reserve_override_usd=args.reserve_override_usd,
+    )
     decision = authorize_launch(
-        policy=BudgetPolicy(),
+        policy=policy,
         recorded_spend_usd=state.recorded_spend_usd,
         hourly_rate_usd=args.hourly_rate,
         requested_hours=args.hours,
         gpu_count=1,
     )
     command = ["brev", "start", args.instance]
-    preview = {"command": command, "decision": asdict(decision), "execute": args.execute}
+    preview = {
+        "command": command,
+        "decision": asdict(decision),
+        "execute": args.execute,
+        "policy": asdict(policy),
+    }
     print(json.dumps(preview, indent=2, sort_keys=True))
     if not args.execute:
         return 0
 
     subprocess.run(command, check=True)
     started_at = _now()
+    state.hard_limit_usd = policy.hard_limit_usd
+    state.reserve_usd = policy.reserve_usd
     state.active_instance = args.instance
     state.active_started_at = started_at.isoformat()
     state.active_hourly_rate_usd = args.hourly_rate
@@ -262,7 +307,6 @@ def _start_existing(args: argparse.Namespace) -> int:
 
 
 def _watch(args: argparse.Namespace) -> int:
-    policy = BudgetPolicy()
     while True:
         state = load_state(args.state)
         if state.active_instance != args.instance:
@@ -270,7 +314,7 @@ def _watch(args: argparse.Namespace) -> int:
         now = _now()
         total = state.recorded_spend_usd + active_accrued_cost(state, now)
         deadline = _parse_time(state.active_deadline) if state.active_deadline else now
-        if now >= deadline or total >= policy.hard_limit_usd:
+        if now >= deadline or total >= state.hard_limit_usd:
             _stop_instance(args.state, args.instance)
             return 0
         time.sleep(30)
@@ -304,6 +348,12 @@ def main() -> int:
     launch.add_argument("--hours", type=float, default=3.0)
     launch.add_argument("--startup-script", type=Path, required=True)
     launch.add_argument(
+        "--hard-limit-usd",
+        type=float,
+        default=None,
+        help="USER-AUTHORIZED replacement campaign hard ceiling persisted for the watchdog.",
+    )
+    launch.add_argument(
         "--reserve-override-usd",
         type=float,
         default=None,
@@ -321,6 +371,8 @@ def main() -> int:
     start_existing.add_argument("--instance", required=True)
     start_existing.add_argument("--hourly-rate", type=float, required=True)
     start_existing.add_argument("--hours", type=float, default=1.0)
+    start_existing.add_argument("--hard-limit-usd", type=float, default=None)
+    start_existing.add_argument("--reserve-override-usd", type=float, default=None)
     start_existing.add_argument("--execute", action="store_true")
     start_existing.set_defaults(handler=_start_existing)
 

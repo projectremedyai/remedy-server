@@ -9,8 +9,11 @@ import pytest
 from tools.finetune.remedy_nemo_rl.brev_control import (
     BrevCampaignState,
     active_accrued_cost,
+    build_budget_policy,
     build_create_command,
     finalize_active_state,
+    load_state,
+    save_state,
 )
 
 
@@ -86,3 +89,35 @@ def test_deleted_unhealthy_build_can_be_reconciled_into_cost_history() -> None:
     assert state.recorded_spend_usd == pytest.approx(0.33)
     assert state.active_instance is None
     assert state.history[-1]["outcome"] == "deleted_unhealthy_build"
+
+
+def test_approved_budget_policy_round_trips_through_campaign_state(tmp_path) -> None:
+    state_path = tmp_path / "brev_state.json"
+    state = BrevCampaignState(
+        recorded_spend_usd=50.82,
+        hard_limit_usd=60.0,
+        reserve_usd=0.6,
+    )
+
+    save_state(state_path, state)
+    restored = load_state(state_path)
+    policy = build_budget_policy(restored)
+
+    assert restored.hard_limit_usd == 60.0
+    assert restored.reserve_usd == 0.6
+    assert policy.hard_limit_usd == 60.0
+    assert policy.no_new_work_usd == pytest.approx(59.4)
+
+
+def test_explicit_launch_limits_override_historical_state() -> None:
+    state = BrevCampaignState(hard_limit_usd=50.0, reserve_usd=10.0)
+
+    policy = build_budget_policy(
+        state,
+        hard_limit_usd=60.0,
+        reserve_override_usd=0.6,
+    )
+
+    assert policy.hard_limit_usd == 60.0
+    assert policy.reserve_usd == 0.6
+    assert policy.no_new_work_usd == pytest.approx(59.4)

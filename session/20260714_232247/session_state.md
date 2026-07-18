@@ -2,15 +2,24 @@
 
 - Session: 20260714_232247
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
-- Branch: codex/autoresearch/remedy-vlm-20260714/qwen25-vllm-serving
+- Branch: codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-16 10:29:31 PDT
+- Updated: 2026-07-17 22:34:03 PDT
 
 ## Goal
-Implement the approved five-adapter NeMo RL campaign on NVIDIA Brev, with Qwen3.5-9B as the target, Qwen2.5-VL-3B as the control, deterministic NeMo Gym rewards, and a hard $50 total Brev credit ceiling.
+Finish the linked LAMC remediation and adapter-training workstreams: preserve the
+398/464 machine-clean PDF deliverable, and validate only adapters that can safely
+improve it. Keep Qwen2.5-VL-3B as the measured training path, the existing production
+routes as rollback, and the campaign's hard $50 Brev ceiling unless the user explicitly
+changes it.
 
 ## Current Subtask
-ALL FIVE CONTROL ADAPTERS TRAINED 2026-07-16 night (contrast 0.0593 / table 0.0310 / alt_text 0.1278 / reading 0.0193 / heading 0.0105 final val; each 119,809,056 bytes, SHA-verified locally). Campaign spend $23.7687 of $50. Six stack defects fixed en route (3 NeMo patches + import shims + language-scoped LoRA targets + build-time length filter). NEXT: evaluation gates against frozen baselines (zero-false-positive promotion constraint), then vLLM serving probes with adapters, then GRPO decision. Qwen3.5 target still parked (OOM).
+Take over the v3 data-fix continuation for `alt_text_quality` and
+`heading_hierarchy`. The missing immutable catalog metadata was restored and the v3
+dataset now passes the authoritative local preflight. No Brev instance exists. Provider
+billing shows the campaign at $50.82. On 2026-07-17 the user approved the exact v3
+experiment plan and raised the hard ceiling to $60. Next: create the dedicated branch,
+commit the hypothesis, update/test the guard for $60, then launch one guarded A100.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -19,6 +28,42 @@ ALL FIVE CONTROL ADAPTERS TRAINED 2026-07-16 night (contrast 0.0593 / table 0.03
 - `nemo-rl-brev-etiquette` - keep source small and route checkpoints, caches, logs, and Ray state to `/ephemeral` on Brev.
 
 ## Current Status
+- Dedicated experiment branch created:
+  `codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`; unrelated MOVE3 remains
+  untracked and unstaged.
+- Budget controller now persists approved hard-limit/reserve values in campaign state,
+  and the detached watchdog reads the same hard limit. Provider reconciliation added a
+  $12.4293 adjustment, taking recorded starting spend to $50.82. Approved state:
+  hard limit $60, conservative rate $3/hour, 2.85-hour window, $0.60 reserve.
+- Guard verification is green: full unit suite 378 passed / 1 skipped; shell syntax and
+  Python compilation passed; launch dry-run authorized projected spend $59.37 with
+  $0.63 remaining below the hard ceiling. Live Brev inventory offers stoppable
+  `a100-80gb.1x` at an advertised $1.98/hour; conservative accounting stays $3/hour.
+- User authorization received verbatim on 2026-07-17: "I Approve the v3 experiment
+  plan and raise the campaign hard ceiling to $60." This authorizes the dedicated v3
+  branch and the previously documented one-A100, at-most-three-hour retrain/eval plan.
+- Stop rules now are: provider-reconciled starting spend $50.82; hard ceiling $60;
+  one GPU; at most three hours; retrieve and SHA-verify artifacts before stop; no GRPO,
+  MOVE3, Qwen3.5, or unrelated adapter work.
+- Recovery on 2026-07-17 confirmed the authoritative whole-project handoffs:
+  `remedy-server/HANDOFF_20260713.md` for the 398/464 PDF deliverable and this session
+  directory plus `datafix_v3_handoff.md` for adapter work. Deleted/archived handoffs are
+  superseded and must not drive new work.
+- `brev ls` reports no instances in org `johnny-01be29-vebe`; nothing is currently billing.
+- The NVIDIA dashboard for 2026-07-01 through 2026-07-17 reports $74.24 org total,
+  $72.75 compute, $1.49 storage, and $75.77 current balance. Excluding the two parallel
+  workstream instances (`brevp1sftr2` $16.79 and `brevp1sft20260716r1` $6.63) leaves
+  $50.82 attributable to the `remedy-*` campaign instances. The local $38.3907 ledger
+  was understated.
+- The inherited worktree is intentionally dirty: modified `brev_state.json`,
+  `handoff.md`, and `build_delivered_dataset.py`; untracked
+  `MOVE3_task_input_redesign.md` and `datafix_v3_handoff.md`. No branch switch, stash,
+  reset, or overwrite was performed during recovery.
+- v3 dataset verification is fully green after restoring the three catalog holdout
+  entries from the prior accepted manifest and independently rechecking each file hash
+  and size. Evidence: `datafix_v3_preflight.json` (`passed=true`), 1,456 media files,
+  exact SFT/Gym example-ID alignment for both tasks, zero subjective alt labels, and six
+  placeholder-classification spot checks. Full unit suite: 368 passed, 1 skipped.
 - Recovery check on 2026-07-16 confirmed the worktree was clean before this documentation refresh, `brev ls` reported no instances in org `johnny-01be29-vebe`, and `brev_state.json` reported no active instance, $0.00 active accrued cost, and $9.9713 conservative local tracked spend.
 - Current `main` was clean at `24f94a0` when the worktree was created.
 - The older `codex/multitask-next` worktree remains separate and dirty only with its prior generated evaluation state.
@@ -74,6 +119,20 @@ ALL FIVE CONTROL ADAPTERS TRAINED 2026-07-16 night (contrast 0.0593 / table 0.03
 - NOTE: `.gitignore` line 150 (`tools/finetune/*`) ignores non-`.py` files there — the `.patch` file must be committed with `git add -f` or it silently never ships in a payload.
 
 ## Plan
+- [x] Recover the two authoritative workstreams, current branch, inherited changes,
+  experiment ledger, promotion gates, and stop rules.
+- [x] Verify live Brev state and reconcile the local ledger against provider billing.
+- [x] Restore the three verified catalog holdout entries to the v3 manifest and rerun
+  the full local preflight at $0.
+- [x] Obtain explicit user confirmation of the experiment plan before creating the v3
+  experiment branch, as required by `nemo-rl-auto-research`.
+- [x] Obtain an explicit new hard ceiling: user raised it from $50 to $60.
+- [x] Create the dedicated v3 branch without staging MOVE3.
+- [x] Reconcile `brev_state.json` to provider spend and make the controller/watchdog
+  persist and enforce the $60 ceiling; test before launch.
+- [ ] Commit the v3 data hypothesis and budget guard on the dedicated branch.
+- [ ] Package v3, use one guarded A100 window, retrain only alt text then heading,
+  retrieve and SHA-verify artifacts, evaluate frozen test splits, and stop.
 - [x] Recover only the reusable five-task builders, evaluators, and trainer scaffolding.
 - [x] Implement grouped dataset rebuilding, normalized verifier targets, deterministic rewards, and tests.
 - [x] Add pinned NeMo RL SFT/GRPO recipes, Brev setup, storage, budget, and artifact-transfer tooling.
@@ -95,6 +154,13 @@ ALL FIVE CONTROL ADAPTERS TRAINED 2026-07-16 night (contrast 0.0593 / table 0.03
 - Under the revised credit constraint, compatibility, frozen baselines, and SFT evidence take priority; unfinished GRPO is reported as budget-limited rather than exceeding the ceiling.
 
 ## Blockers
+- RESOLVED 2026-07-17: provider-derived campaign spend was $50.82 above the old $50
+  ceiling; the user explicitly raised the hard ceiling to $60 and approved the v3 plan.
+- RESOLVED 2026-07-17: launch and detached watchdog now share the hard limit persisted
+  in campaign state. Tests and the exact dry-run are green.
+- RESOLVED 2026-07-17: the v3 manifest omitted the three immutable catalog holdout
+  entries. Their paths, hashes, and sizes were independently verified and restored;
+  authoritative preflight now passes.
 - Brev custom-container mode is rejected for this campaign. It failed across earlier full attempts, and the tiny NVIDIA container preflight showed the host/GPU became available while the requested custom container never started.
 - The official NeMo RL training container does not include PEFT or vLLM by default. PEFT can be installed, but current vLLM installation attempts replace the NeMo-pinned Torch/Transformers stack and conflict with `nemo-rl==0.6.0`.
 - Do not install vLLM into the NeMo RL training image for the next spike. Treat training and serving as separate runtimes or build explicit derived images.

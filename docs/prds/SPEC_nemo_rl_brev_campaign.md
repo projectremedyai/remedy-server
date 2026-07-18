@@ -1,10 +1,10 @@
 # Five-Adapter NeMo RL Campaign on NVIDIA Brev
 
-**Status:** Implemented locally; paid GPU compatibility and training evidence pending
+**Status:** Five control adapters trained and evaluated; v3 alt/heading retrain approved
 
 **Prepared:** 2026-07-14
 
-**Branch:** `codex/nemo-rl-brev-five-adapter`
+**Branch:** `codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`
 
 ## Objective
 
@@ -14,12 +14,15 @@ primary is `Qwen/Qwen3.5-9B`; `Qwen/Qwen2.5-VL-3B-Instruct` is the technical and
 quality control. The existing Qwen3-VL-32B router remains the rollback until all
 promotion and serving gates pass.
 
-The current allocation is stricter than the original plan:
+The original allocation was a $50 hard ceiling with a $10 reserve. Provider billing
+reconciliation on 2026-07-17 put the `remedy-*` campaign at $50.82. The user then
+approved the v3 experiment and raised the hard ceiling to $60. The v3 window uses:
 
-- hard credit ceiling: $50;
-- no new paid work at $40;
-- $10 reserve for teardown and artifact retrieval;
-- at most one GPU and three hours for the first instance;
+- hard credit ceiling: $60;
+- provider-reconciled starting spend: $50.82;
+- conservative accounting rate: $3.00/hour for an advertised $1.98/hour A100;
+- $0.60 reserve below the no-new-work line;
+- at most one GPU and 2.85 hours for the v3 instance;
 - no 4-GPU escalation without new user approval.
 
 ## Implemented Components
@@ -69,16 +72,19 @@ with too few real LAMC correction examples.
 
 ## Guarded Brev Run
 
-The launcher is dry-run unless `--execute` is present. At the observed H200
-rate of $5.40/hour, three hours projects to $16.20.
+The launcher is dry-run unless `--execute` is present. The hard limit and reserve are
+persisted into campaign state so the detached watchdog enforces the same policy that
+authorized the launch. For the approved v3 A100 window:
 
 ```bash
 uv run python -m tools.finetune.remedy_nemo_rl.brev_control launch \
   --state session/20260714_232247/brev_state.json \
-  --instance remedy-nemo-rl-20260714 \
-  --instance-type gpu-h200-sxm.1gpu-16vcpu-200gb \
-  --hourly-rate 5.40 \
-  --hours 3 \
+  --instance remedy-qwen25-v3-sft-20260717 \
+  --instance-type a100-80gb.1x \
+  --hourly-rate 3.00 \
+  --hours 2.85 \
+  --hard-limit-usd 60 \
+  --reserve-override-usd 0.60 \
   --startup-script tools/finetune/brev_startup.sh
 ```
 

@@ -60,3 +60,24 @@ def test_reserve_override_moves_the_no_new_work_line_consistently() -> None:
     policy = BudgetPolicy(reserve_usd=7.0, no_new_work_usd=43.0)
     assert policy.hard_limit_usd == 50.0
     assert policy.no_new_work_usd == 43.0
+
+
+def test_user_approved_sixty_dollar_ceiling_authorizes_v3_window() -> None:
+    """The 2026-07-17 v3 approval raises the hard limit, not just the reserve."""
+
+    policy = BudgetPolicy(
+        hard_limit_usd=60.0,
+        reserve_usd=0.6,
+        no_new_work_usd=59.4,
+    )
+    decision = authorize_launch(
+        policy=policy,
+        recorded_spend_usd=50.82,
+        hourly_rate_usd=3.0,
+        requested_hours=2.85,
+        gpu_count=1,
+    )
+
+    assert decision.authorized is True
+    assert decision.projected_total_usd == pytest.approx(59.37)
+    assert decision.remaining_hard_limit_usd == pytest.approx(0.63)

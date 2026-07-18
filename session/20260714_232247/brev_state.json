@@ -3,6 +3,7 @@
   "active_hourly_rate_usd": null,
   "active_instance": null,
   "active_started_at": null,
+  "hard_limit_usd": 60.0,
   "history": [
     {
       "cost_usd": 0.0929,
@@ -99,7 +100,49 @@
       "outcome": "stopped",
       "started_at": "2026-07-16T22:37:00.710218+00:00",
       "stopped_at": "2026-07-17T01:35:01.506123+00:00"
+    },
+    {
+      "cost_usd": 2.687,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-eval-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-17T02:09:25.562691+00:00",
+      "stopped_at": "2026-07-17T03:30:50.931359+00:00"
+    },
+    {
+      "cost_usd": 4.9509,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-grpo-alt-20260716",
+      "outcome": "stopped",
+      "started_at": "2026-07-17T05:48:47.539592+00:00",
+      "stopped_at": "2026-07-17T08:18:49.224100+00:00"
+    },
+    {
+      "cost_usd": 2.725,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-grpo2-20260717",
+      "outcome": "stopped",
+      "started_at": "2026-07-17T08:39:34.405356+00:00",
+      "stopped_at": "2026-07-17T10:02:08.967817+00:00"
+    },
+    {
+      "cost_usd": 4.2591,
+      "hourly_rate_usd": 1.98,
+      "instance": "remedy-qwen25-grpo3-20260717",
+      "outcome": "stopped",
+      "started_at": "2026-07-17T10:07:32.534262+00:00",
+      "stopped_at": "2026-07-17T12:16:36.353318+00:00"
+    },
+    {
+      "cost_usd": 12.4293,
+      "hourly_rate_usd": 0.0,
+      "instance": "provider-billing-reconciliation-20260717",
+      "note": "Adjusted local elapsed-time history to the NVIDIA Billing total for remedy-* instances; parallel brevp1 instances excluded.",
+      "outcome": "provider_reconciliation",
+      "started_at": "2026-07-18T04:43:31+00:00",
+      "stopped_at": "2026-07-18T04:43:31+00:00"
     }
   ],
-  "recorded_spend_usd": 23.7687
+  "recorded_spend_usd": 50.82,
+  "reserve_usd": 0.6
 }
