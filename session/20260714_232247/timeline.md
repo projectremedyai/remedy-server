@@ -230,3 +230,19 @@
   22 minutes for 208 adapter-only frozen-test generations, leaving setup, transfer,
   retrieval, and stop margin inside 171 minutes. This is a real one-epoch experiment,
   not a smoke; a missed gate is reported as budget-limited evidence and is not extended.
+
+## 2026-07-17 23:08:07 PDT
+- Guarded A100 `remedy-qwen25-v3-sft-20260717` created; payload copied and independently
+  SHA-verified on the host. Setup passed pinned NeMo/Gym commits, three patches, and the
+  patched import assertion. Dataset copy has 1,456 real media files.
+- Found and fixed a live watchdog-detach defect before relying on it: inherited PTY
+  stdin became a bad descriptor when the launcher exited. Added `stdin=DEVNULL` with a
+  RED-to-GREEN regression test; full unit suite 379 passed / 1 skipped. Corrected
+  watchdog PID 67914 is detached under init and enforcing the original deadline.
+- Alt attempt 1 stopped before a successful optimizer step on `Batch sizes [8,7]`.
+  Exact processor audit found the v3 data had not been passed through the mandatory
+  8,128-token build-time filter: dropped 4/238 alt train, 49/1,202 heading train, and
+  4/188 heading validation rows; frozen test splits unchanged. Alt stays exactly
+  balanced at 117 pass / 117 fail; heading is 576 fail / 577 pass.
+- Alt attempt 2 passed dataloader preflight on the filtered corpus, loaded genuine
+  language-scoped LoRA modules, and began the one-epoch 29-step run.

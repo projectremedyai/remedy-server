@@ -206,6 +206,7 @@ def _arm_watchdog(state_path: Path, instance: str) -> int:
             "--instance",
             instance,
         ],
+        stdin=subprocess.DEVNULL,
         stdout=log_stream,
         stderr=subprocess.STDOUT,
         start_new_session=True,

@@ -4,7 +4,7 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-17 22:41:36 PDT
+- Updated: 2026-07-17 23:08:07 PDT
 
 ## Goal
 Finish the linked LAMC remediation and adapter-training workstreams: preserve the
@@ -28,6 +28,19 @@ promotion gates, retrieve/SHA-verify all artifacts, and stop.
 - `nemo-rl-brev-etiquette` - keep source small and route checkpoints, caches, logs, and Ray state to `/ephemeral` on Brev.
 
 ## Current Status
+- Live instance `remedy-qwen25-v3-sft-20260717` (`qbi6v2ajr`) is running under
+  the approved 2.85-hour window; deadline is 2026-07-18 08:35:49 UTC. The original
+  detached watchdog inherited a dead PTY stdin and exited with `Bad file descriptor`.
+  TDD fix: `_arm_watchdog` now passes `stdin=subprocess.DEVNULL`; full local unit suite
+  is 379 passed / 1 skipped. Corrected detached watchdog PID 67914 has PPID 1 and is
+  enforcing the persisted $60 state.
+- First alt attempt passed dataloader preflight and loaded genuine language-only LoRA,
+  but stopped before learning at step 1 with the known `[8,7]` batch invariant. Exact
+  processor measurement proved the v3 rebuild had skipped the required build-time
+  length filter: 4 alt train, 49 heading train, and 4 heading validation rows exceeded
+  8,128 tokens (worst heading row 41,321). Remote SFT corpus was filtered and manifest
+  recounted; frozen test data is unchanged. Usable counts are alt 234/54 train/val and
+  heading 1,153/184. Second alt attempt passed preflight and is actively training.
 - Time-budgeted run design: `sft.max_num_epochs=1`, `sft.val_at_start=false`,
   `sft.val_period=1000000`, `sft.val_at_end=true`, and a 1,000,000-step periodic save
   (the end-of-run checkpoint remains required). This preserves a complete epoch and end

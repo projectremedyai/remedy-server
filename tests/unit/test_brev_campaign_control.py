@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import subprocess
 
 import pytest
 
+from tools.finetune.remedy_nemo_rl import brev_control
 from tools.finetune.remedy_nemo_rl.brev_control import (
     BrevCampaignState,
     active_accrued_cost,
@@ -15,6 +17,25 @@ from tools.finetune.remedy_nemo_rl.brev_control import (
     load_state,
     save_state,
 )
+
+
+def test_watchdog_detaches_from_parent_stdin(tmp_path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 12345
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(brev_control.subprocess, "Popen", fake_popen)
+
+    pid = brev_control._arm_watchdog(tmp_path / "state.json", "remedy-test")
+
+    assert pid == 12345
+    assert captured["stdin"] is subprocess.DEVNULL
 
 
 def test_create_command_pins_stoppable_h200_and_official_container() -> None:
