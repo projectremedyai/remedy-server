@@ -23,9 +23,9 @@ grpo_order:
   - reading_order
   - alt_text_quality
 budget:
-  hard_limit_usd: 50.0
-  no_new_work_usd: 40.0
-  reserve_usd: 10.0
+  hard_limit_usd: 60.0
+  no_new_work_usd: 59.4
+  reserve_usd: 0.6
   max_instance_hours: 3.0
   max_gpu_count: 1
 brev:

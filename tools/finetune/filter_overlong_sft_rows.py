@@ -23,12 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools.finetune.remedy_nemo_rl.dataset import _sha256
 from tools.finetune.remedy_nemo_rl.reward import normalized_status
 
 # Runtime length = get_formatted_message_log's per-turn assembly, which adds
@@ -57,14 +59,41 @@ def partition_rows(
     return kept, dropped
 
 
-def recount(rows: list[dict[str, Any]], task: str) -> dict[str, int]:
+def recount(rows: list[dict[str, Any]], task: str) -> dict[str, Any]:
     """Recompute the manifest's pass/fail/total counts for one task split."""
-    counts = {"total": len(rows), "pass": 0, "fail": 0}
+    counts: dict[str, Any] = {"total": len(rows), "pass": 0, "fail": 0}
+    source_types: Counter[str] = Counter()
     for row in rows:
         status = normalized_status(row.get("verifier_target") or {}, task)
         if status in ("pass", "fail"):
             counts[status] += 1
+        source_types[str((row.get("meta") or {}).get("source_type") or "unknown")] += 1
+    counts["source_types"] = dict(sorted(source_types.items()))
     return counts
+
+
+def update_manifest_after_filter(
+    manifest: dict[str, Any],
+    dataset_root: Path,
+    jsonl: Path,
+    rows: list[dict[str, Any]],
+    task: str,
+    split: str,
+) -> None:
+    """Refresh counts and the content hash after rewriting one SFT split.
+
+    Args:
+        manifest: Mutable campaign manifest for the dataset.
+        dataset_root: Root used for manifest-relative dataset paths.
+        jsonl: Rewritten task-specific SFT JSONL.
+        rows: Rows retained after exact token-length filtering.
+        task: Campaign task name.
+        split: Dataset split name.
+    """
+
+    manifest["counts"][split][task] = recount(rows, task)
+    relative = jsonl.relative_to(dataset_root).as_posix()
+    manifest.setdefault("dataset_hashes", {})[relative] = _sha256(jsonl)
 
 
 def _get_processor():
@@ -148,10 +177,9 @@ def main() -> int:
                     for l in jsonl.read_text(encoding="utf-8").splitlines()
                     if l.strip()
                 ]
-                manifest["counts"][split][task] = {
-                    **manifest["counts"][split].get(task, {}),
-                    **recount(rows, task),
-                }
+                update_manifest_after_filter(
+                    manifest, args.dataset_root, jsonl, rows, task, split
+                )
             print(
                 f"{task}/{split}: rows={result['rows']} dropped={len(result['dropped'])} "
                 f"max_kept={result['max_kept_tokens']}"

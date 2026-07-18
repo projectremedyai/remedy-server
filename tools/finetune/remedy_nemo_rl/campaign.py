@@ -19,6 +19,7 @@ TASKS_BY_PAID_PRIORITY = (
     "reading_order",
     "heading_hierarchy",
 )
+MAX_FILTERED_SEQUENCE_TOKENS = 8128
 MODEL_CONFIGS = {
     "target": "/home/ubuntu/RL/examples/configs/remedy/sft_qwen35_9b_h200.yaml",
     "control": "/home/ubuntu/RL/examples/configs/remedy/sft_qwen25_vl_3b_h200.yaml",
@@ -137,6 +138,13 @@ def campaign_plan(manifest: dict[str, Any], dataset_root: Path) -> list[dict[str
 
 def _run_sft(args: argparse.Namespace) -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    length_filter = manifest.get("length_filter") or {}
+    filtered_max = length_filter.get("max_tokens")
+    if not isinstance(filtered_max, int) or filtered_max > MAX_FILTERED_SEQUENCE_TOKENS:
+        raise SystemExit(
+            "dataset manifest does not prove the exact length filter; run "
+            "filter_overlong_sft_rows.py --max-tokens 8128 --apply before SFT"
+        )
     count = int(manifest["counts"]["train"][args.task]["total"])
     command, environment = build_sft_command(
         task=args.task,

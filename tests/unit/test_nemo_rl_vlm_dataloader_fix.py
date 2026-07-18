@@ -22,6 +22,7 @@ The fix has three parts, each pinned by a test here:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -197,7 +198,12 @@ def test_preflight_command_gates_the_same_task_and_config() -> None:
 def _fake_manifest(tmp_path: Path) -> Path:
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
-        json.dumps({"counts": {"train": {"contrast": {"total": 114}}}}),
+        json.dumps(
+            {
+                "counts": {"train": {"contrast": {"total": 114}}},
+                "length_filter": {"max_tokens": 8128},
+            }
+        ),
         encoding="utf-8",
     )
     return manifest
@@ -285,17 +291,49 @@ def test_run_sft_aborts_when_preflight_fails(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_length_filter_partitions_and_recounts() -> None:
+def test_run_sft_rejects_manifest_without_exact_length_filter(tmp_path) -> None:
+    from tools.finetune.remedy_nemo_rl import campaign
+
+    manifest = tmp_path / "unfiltered.json"
+    manifest.write_text(
+        json.dumps({"counts": {"train": {"contrast": {"total": 114}}}}),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        manifest=manifest,
+        dataset_root=_fake_dataset_root(tmp_path),
+        task="contrast",
+        model_role="control",
+    )
+
+    with pytest.raises(SystemExit, match="exact length filter"):
+        campaign._run_sft(args)
+
+
+def test_length_filter_partitions_recounts_and_refreshes_manifest(tmp_path) -> None:
     """Overlong rows must be dropped at BUILD time: runtime truncation of
     multimodal rows violates NeMo's uniform-batch invariants layer after
     layer (forward feature mismatch -> collation NoneType -> BatchedDataDict
     size assertion, all hit live 2026-07-16). Every shipped row must fit."""
-    from tools.finetune.filter_overlong_sft_rows import partition_rows, recount
+    from tools.finetune.filter_overlong_sft_rows import (
+        partition_rows,
+        recount,
+        update_manifest_after_filter,
+    )
 
     rows = [
-        {"verifier_target": {"issues": []}, "meta": {"task": "contrast"}},
-        {"verifier_target": {"issues": [{"kind": "low"}]}, "meta": {"task": "contrast"}},
-        {"verifier_target": {"issues": []}, "meta": {"task": "contrast"}},
+        {
+            "verifier_target": {"issues": []},
+            "meta": {"task": "contrast", "source_type": "real"},
+        },
+        {
+            "verifier_target": {"issues": [{"kind": "low"}]},
+            "meta": {"task": "contrast", "source_type": "synthetic"},
+        },
+        {
+            "verifier_target": {"issues": []},
+            "meta": {"task": "contrast", "source_type": "real"},
+        },
     ]
     kept, dropped = partition_rows(rows, [100, 9000, 200], max_tokens=8128)
     assert len(kept) == 2
@@ -304,3 +342,20 @@ def test_length_filter_partitions_and_recounts() -> None:
     assert counts["total"] == 2
     assert counts["pass"] == 2
     assert counts["fail"] == 0
+    assert counts["source_types"] == {"real": 2}
+
+    root = tmp_path / "dataset"
+    jsonl = root / "sft" / "contrast" / "train.jsonl"
+    jsonl.parent.mkdir(parents=True)
+    payload = "\n".join(json.dumps(row, sort_keys=True) for row in kept) + "\n"
+    jsonl.write_text(payload, encoding="utf-8")
+    manifest = {
+        "counts": {"train": {"contrast": {"total": 3}}},
+        "dataset_hashes": {"sft/contrast/train.jsonl": "stale"},
+    }
+
+    update_manifest_after_filter(manifest, root, jsonl, kept, "contrast", "train")
+
+    expected_hash = hashlib.sha256(payload.encode()).hexdigest()
+    assert manifest["counts"]["train"]["contrast"] == counts
+    assert manifest["dataset_hashes"]["sft/contrast/train.jsonl"] == expected_hash
