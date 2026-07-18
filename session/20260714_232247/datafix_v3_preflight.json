@@ -9,7 +9,7 @@
   "schema_errors": [],
   "split_documents": {
     "test": 137,
-    "train": 640,
-    "validation": 139
+    "train": 627,
+    "validation": 136
   }
 }

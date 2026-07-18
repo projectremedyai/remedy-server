@@ -47,12 +47,12 @@
     },
     "train": {
       "alt_text_quality": {
-        "fail": 119,
-        "pass": 119,
+        "fail": 117,
+        "pass": 117,
         "source_types": {
-          "delivered": 238
+          "delivered": 234
         },
-        "total": 238
+        "total": 234
       },
       "contrast": {
         "fail": 57,
@@ -63,31 +63,31 @@
         "total": 114
       },
       "heading_hierarchy": {
-        "fail": 601,
-        "pass": 601,
+        "fail": 576,
+        "pass": 577,
         "source_types": {
-          "real": 664,
+          "real": 615,
           "synthetic": 538
         },
-        "total": 1202
+        "total": 1153
       },
       "reading_order": {
-        "fail": 141,
-        "pass": 141,
+        "fail": 139,
+        "pass": 139,
         "source_types": {
-          "delivered": 98,
-          "real": 184
+          "delivered": 96,
+          "real": 182
         },
-        "total": 282
+        "total": 278
       },
       "table_structure": {
-        "fail": 114,
-        "pass": 114,
+        "fail": 112,
+        "pass": 112,
         "source_types": {
-          "delivered": 50,
-          "real": 178
+          "delivered": 48,
+          "real": 176
         },
-        "total": 228
+        "total": 224
       }
     },
     "validation": {
@@ -108,22 +108,22 @@
         "total": 24
       },
       "heading_hierarchy": {
-        "fail": 55,
-        "pass": 133,
+        "fail": 54,
+        "pass": 130,
         "source_types": {
-          "real": 106,
+          "real": 102,
           "synthetic": 82
         },
-        "total": 188
+        "total": 184
       },
       "reading_order": {
-        "fail": 17,
-        "pass": 17,
+        "fail": 16,
+        "pass": 16,
         "source_types": {
           "delivered": 8,
-          "real": 26
+          "real": 24
         },
-        "total": 34
+        "total": 32
       },
       "table_structure": {
         "fail": 14,
@@ -156,23 +156,23 @@
     "gym/train.jsonl": "ddf5384b4e9480975e08ced73e2e63fa5a7635e9b18917e71e51f240369ed7d0",
     "gym/validation.jsonl": "26715348e0c5ecf70fda80a0038471d95cb47a28dd6fdf37743e1024d661ecea",
     "sft/alt_text_quality/test.jsonl": "ea1611a3f00faa63167a254c102f894f15266d48da4ac7e1b7ff542a23c93e52",
-    "sft/alt_text_quality/train.jsonl": "e2b3e13cba1484988f447140dcbc59826504294c4d96bbda9e0ee92c27f10d84",
+    "sft/alt_text_quality/train.jsonl": "53458fd3c6dd9e51bba00908fd7e60d56fdd98f43e9092be93a65ba4670fede6",
     "sft/alt_text_quality/validation.jsonl": "a583434a9b9ecaff7c74d48e6c6ca51bc2980f9ad2b9ff7dbb73675a324ab056",
     "sft/contrast/test.jsonl": "25c341ac66781c5dd9ffe119521b84123002a3d0648b04bfe8d03e3f4556eef2",
     "sft/contrast/train.jsonl": "130843171cc1430a0874f8b20930a1e53acc4f10eb8be8031dd202422535844b",
     "sft/contrast/validation.jsonl": "53d98215c191df7d4016e8024c6fde188a66415bd9af447f2530d4d88fd5a8d1",
     "sft/heading_hierarchy/test.jsonl": "1570d091604925fb1014d5190dce2c2071ad83f8a99db2afaa7ea02997c9a509",
-    "sft/heading_hierarchy/train.jsonl": "6d486d7982b88578e77b1c69a7e9cbf1ef6b2da5f3cc70994a9bd056c585069d",
-    "sft/heading_hierarchy/validation.jsonl": "5ab17448c8c6e36754b002f5017f903f5c2f1503236cc7e8e44df95382ddc0b9",
+    "sft/heading_hierarchy/train.jsonl": "9a5f5c2b29e01db9f36e2e61917c1ab43dcea5b1495e4724dc5e65eaa0682d3b",
+    "sft/heading_hierarchy/validation.jsonl": "cd59727f1890fa3f080a515be6ff1581d42aaddffd69faa267844d5ee878c9a0",
     "sft/reading_order/test.jsonl": "0b670f22a8a3076e53a5c568b45a689c93b25f80d3e8f9ff44fbb3c204e0aa24",
-    "sft/reading_order/train.jsonl": "3d7486c6190346b0e1b385c20427529d3f820adcd2c0cea0f0bbb8ebdf48d0a2",
-    "sft/reading_order/validation.jsonl": "47115b331ffb62ee42aad48cdafe53d064b62d19813015f6d57298928cd71503",
+    "sft/reading_order/train.jsonl": "fe593a34680820956e1f365269f073e7880de40314d32ff45fff7bde2145aab3",
+    "sft/reading_order/validation.jsonl": "a1f9ebe61ebfb31b57f495dbe55ba84887f0e935d219a69ab79afc96a9d2d2cf",
     "sft/table_structure/test.jsonl": "4eb40bbd85eb4d3eaaacfbcbc8a10de6bab740ecf33ed6715232430a89889464",
-    "sft/table_structure/train.jsonl": "e4a83372d2f555549d93012d1c757a46e0611a60965dc0f629c579cefa9badb8",
+    "sft/table_structure/train.jsonl": "92c965062cf2004d1f6fb46f932bbe8573a33ed945d079aec61b6713dbd1ca1e",
     "sft/table_structure/validation.jsonl": "68b782b48360fd0b98fff8811c4460b0b31f3cbec4e787bf0256e420470b3fef",
     "sft/test.jsonl": "d61c8a5bd91d8883e14550fbccedfbeac19b32c4c734eb47d08c9798d7461df6",
-    "sft/train.jsonl": "034aab3d8289fe1a659e2da9070adb0785f92e82b1540d5de01b52046c648eab",
-    "sft/validation.jsonl": "35c4de08f2ebf067de053f82587d87c7e305188a5e2b3a695a5e9d03b4897e44"
+    "sft/train.jsonl": "cae9c79546e2a1c0b6e030157a030914195f5d1caa4d9746ada3158933343cb5",
+    "sft/validation.jsonl": "42d0015a9a159826722f10b64c81000f2f10dc0e9e569be1a6e2f74995efb67b"
   },
   "excluded_rows": 0,
   "holdout_files": {
@@ -197,6 +197,9 @@
     "2024 25 catalog",
     "2023 24 catalog"
   ],
+  "length_filter": {
+    "max_tokens": 8128
+  },
   "schema_version": 1,
   "seed": 20260714,
   "source_hashes": {

@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-07-18 — v3 SFT campaign complete; both candidates rejected
+
+The approved v3 experiment is finished on
+`codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`. Both Qwen2.5-VL-3B
+language-only LoRA adapters trained and exported correctly, but neither passed the
+frozen promotion gates:
+
+| task | end val loss | frozen status | valid JSON | real-pass FPs | exact | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| alt_text_quality | 0.1680 | 0.7460 | 0.8571 | 7 | 0.5313 | REJECT |
+| heading_hierarchy | 0.0193 | 0.8207 | 0.9448 | 8 | 0.3333 | REJECT |
+
+Keep the incumbent alt/heading routes; table structure remains the only promoted
+adapter. Do not feed either v3 adapter into the PDF remediation deliverable. The main
+PDF status therefore remains `remedy-server/HANDOFF_20260713.md` at 398/464 clean.
+
+The v3 adapter files are each 119,809,056 bytes, contain 504/504 language-model tensors
+and zero visual tensors, and are SHA-verified locally. Predictions, reports, logs,
+configs, and manifests are under
+`session/20260714_232247/remote_artifacts/qwen25_v3_*`. Exact processor filtering was
+also made idempotent and extended to aggregate SFT files; the refreshed v3 preflight is
+green with no hash mismatches or dataset-integrity failures.
+
+The A100 window ran from `2026-07-18T05:44:49Z` to `08:16:48Z` and cost a conservative
+$7.5988, bringing campaign accounting to **$58.4188/$60**. The controller records no
+active instance. Brev confirmed the workspace `STOPPED`; delete was requested twice and
+provider state has now converged—the workspace no longer appears in `brev ls`.
+
+The next adapter work, if authorized, is not another blind SFT epoch. Alt needs bounded
+output shaping and pass-page calibration; heading needs better real correction evidence
+or a redesigned task. Contrast/reading-order remain the separate MOVE3 input-redesign
+track. See `datafix_v3_handoff.md` and `experiments.tsv` rows 37–40.
+
 ## 2026-07-17 takeover — v3 approved; guard/branch setup before launch
 
 The authoritative PDF deliverable remains `remedy-server/HANDOFF_20260713.md`

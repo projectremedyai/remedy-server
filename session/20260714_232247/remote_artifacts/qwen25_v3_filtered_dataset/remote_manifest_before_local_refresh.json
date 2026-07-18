@@ -1,0 +1,225 @@
+{
+  "counts": {
+    "test": {
+      "alt_text_quality": {
+        "fail": 32,
+        "pass": 31,
+        "source_types": {
+          "delivered": 63
+        },
+        "total": 63
+      },
+      "contrast": {
+        "fail": 13,
+        "pass": 11,
+        "source_types": {
+          "synthetic": 24
+        },
+        "total": 24
+      },
+      "heading_hierarchy": {
+        "fail": 30,
+        "pass": 115,
+        "source_types": {
+          "real": 73,
+          "synthetic": 72
+        },
+        "total": 145
+      },
+      "reading_order": {
+        "fail": 30,
+        "pass": 30,
+        "source_types": {
+          "delivered": 26,
+          "real": 34
+        },
+        "total": 60
+      },
+      "table_structure": {
+        "fail": 18,
+        "pass": 18,
+        "source_types": {
+          "delivered": 12,
+          "real": 24
+        },
+        "total": 36
+      }
+    },
+    "train": {
+      "alt_text_quality": {
+        "fail": 117,
+        "pass": 117,
+        "source_types": {
+          "delivered": 238
+        },
+        "total": 234
+      },
+      "contrast": {
+        "fail": 57,
+        "pass": 57,
+        "source_types": {
+          "synthetic": 114
+        },
+        "total": 114
+      },
+      "heading_hierarchy": {
+        "fail": 576,
+        "pass": 577,
+        "source_types": {
+          "real": 664,
+          "synthetic": 538
+        },
+        "total": 1153
+      },
+      "reading_order": {
+        "fail": 139,
+        "pass": 139,
+        "source_types": {
+          "delivered": 98,
+          "real": 184
+        },
+        "total": 278
+      },
+      "table_structure": {
+        "fail": 112,
+        "pass": 112,
+        "source_types": {
+          "delivered": 50,
+          "real": 178
+        },
+        "total": 224
+      }
+    },
+    "validation": {
+      "alt_text_quality": {
+        "fail": 28,
+        "pass": 26,
+        "source_types": {
+          "delivered": 54
+        },
+        "total": 54
+      },
+      "contrast": {
+        "fail": 12,
+        "pass": 12,
+        "source_types": {
+          "synthetic": 24
+        },
+        "total": 24
+      },
+      "heading_hierarchy": {
+        "fail": 54,
+        "pass": 130,
+        "source_types": {
+          "real": 106,
+          "synthetic": 82
+        },
+        "total": 184
+      },
+      "reading_order": {
+        "fail": 16,
+        "pass": 16,
+        "source_types": {
+          "delivered": 8,
+          "real": 26
+        },
+        "total": 32
+      },
+      "table_structure": {
+        "fail": 14,
+        "pass": 14,
+        "source_types": {
+          "delivered": 2,
+          "real": 26
+        },
+        "total": 28
+      }
+    }
+  },
+  "dataset_hashes": {
+    "gym/alt_text_quality/test.jsonl": "8a1abf56f59226b8de6d46bb5b17ba330fdcc35b740f844820b4fdbb8eb6b164",
+    "gym/alt_text_quality/train.jsonl": "041ea59c4aec66196d6ea835aeb4e6c87d500d3f5c8add2f004706d399abca58",
+    "gym/alt_text_quality/validation.jsonl": "4472c186c36953006a890b1cc4588e3282a010fa120deaf14f48f39d5ec3de5d",
+    "gym/contrast/test.jsonl": "1fdfca5ac3b3a4fd2ced1e5752cec7ae3f0cf30f5a3b07846d8266c80cc03833",
+    "gym/contrast/train.jsonl": "190977492aa2da9df3b9f1a7392db44d2e9a76388b349cbc2f841018483bfe31",
+    "gym/contrast/validation.jsonl": "7a7c90d39e474c18b7acd0a562b5eca1e6786078891f0773c43973bd63eac3c3",
+    "gym/heading_hierarchy/test.jsonl": "c845bb74bf66d66f715c4272869ce58dce7f8709252fa7f799019481dc83e453",
+    "gym/heading_hierarchy/train.jsonl": "87fd0c9b7df34a3e91b039e597b2e4479f3ea735760900a75697ecfa100d53a6",
+    "gym/heading_hierarchy/validation.jsonl": "33b8953c527af8fccdc35d32029ef32aaa5015382b640ddd815724fc9dd1783a",
+    "gym/reading_order/test.jsonl": "b6577c0fc1df146fcd97ff382d88b57775f5cc4195b445c375161d286ff5bd66",
+    "gym/reading_order/train.jsonl": "60c319a43c2dba70f6a5073a1fb8b164e56232d24630b0d6995dd71a24a35be9",
+    "gym/reading_order/validation.jsonl": "1ec1f3a96dc2945e2b5eb87f8d4bc4dd7227e6ae1d7382437aae34c5ce256054",
+    "gym/table_structure/test.jsonl": "e94f58f1436f7a0828d861a79516e91b69817eeb645fd094c73bb10c07e37ab5",
+    "gym/table_structure/train.jsonl": "2a635fa24cf6b637500cae18466d78224d1c9f213ba90c13b660f944fc13b5a5",
+    "gym/table_structure/validation.jsonl": "3843defa7aec20c4489dfdf9d0ff168c36a688a91e113249cf780b813eb05135",
+    "gym/test.jsonl": "508a3bce36095889838bf537a4e10671410028d3474f2d8cd51de751cbdc133b",
+    "gym/train.jsonl": "ddf5384b4e9480975e08ced73e2e63fa5a7635e9b18917e71e51f240369ed7d0",
+    "gym/validation.jsonl": "26715348e0c5ecf70fda80a0038471d95cb47a28dd6fdf37743e1024d661ecea",
+    "sft/alt_text_quality/test.jsonl": "ea1611a3f00faa63167a254c102f894f15266d48da4ac7e1b7ff542a23c93e52",
+    "sft/alt_text_quality/train.jsonl": "e2b3e13cba1484988f447140dcbc59826504294c4d96bbda9e0ee92c27f10d84",
+    "sft/alt_text_quality/validation.jsonl": "a583434a9b9ecaff7c74d48e6c6ca51bc2980f9ad2b9ff7dbb73675a324ab056",
+    "sft/contrast/test.jsonl": "25c341ac66781c5dd9ffe119521b84123002a3d0648b04bfe8d03e3f4556eef2",
+    "sft/contrast/train.jsonl": "130843171cc1430a0874f8b20930a1e53acc4f10eb8be8031dd202422535844b",
+    "sft/contrast/validation.jsonl": "53d98215c191df7d4016e8024c6fde188a66415bd9af447f2530d4d88fd5a8d1",
+    "sft/heading_hierarchy/test.jsonl": "1570d091604925fb1014d5190dce2c2071ad83f8a99db2afaa7ea02997c9a509",
+    "sft/heading_hierarchy/train.jsonl": "6d486d7982b88578e77b1c69a7e9cbf1ef6b2da5f3cc70994a9bd056c585069d",
+    "sft/heading_hierarchy/validation.jsonl": "5ab17448c8c6e36754b002f5017f903f5c2f1503236cc7e8e44df95382ddc0b9",
+    "sft/reading_order/test.jsonl": "0b670f22a8a3076e53a5c568b45a689c93b25f80d3e8f9ff44fbb3c204e0aa24",
+    "sft/reading_order/train.jsonl": "3d7486c6190346b0e1b385c20427529d3f820adcd2c0cea0f0bbb8ebdf48d0a2",
+    "sft/reading_order/validation.jsonl": "47115b331ffb62ee42aad48cdafe53d064b62d19813015f6d57298928cd71503",
+    "sft/table_structure/test.jsonl": "4eb40bbd85eb4d3eaaacfbcbc8a10de6bab740ecf33ed6715232430a89889464",
+    "sft/table_structure/train.jsonl": "e4a83372d2f555549d93012d1c757a46e0611a60965dc0f629c579cefa9badb8",
+    "sft/table_structure/validation.jsonl": "68b782b48360fd0b98fff8811c4460b0b31f3cbec4e787bf0256e420470b3fef",
+    "sft/test.jsonl": "d61c8a5bd91d8883e14550fbccedfbeac19b32c4c734eb47d08c9798d7461df6",
+    "sft/train.jsonl": "034aab3d8289fe1a659e2da9070adb0785f92e82b1540d5de01b52046c648eab",
+    "sft/validation.jsonl": "35c4de08f2ebf067de053f82587d87c7e305188a5e2b3a695a5e9d03b4897e44"
+  },
+  "excluded_rows": 0,
+  "holdout_files": {
+    "/Users/laccd/code/lamc_district_forms/data/visual_match/downloads/lamc/0312e204645b_LAMC-Catalog-2024-2025.pdf": {
+      "sha256": "63929fb3950d6dfa96bcf4fa8c3a5224148d31d8fd68fdff2433a89d6b3263d7",
+      "size_bytes": 7394738
+    },
+    "/Users/laccd/code/lamc_district_forms/data/visual_match/downloads/lamc/1d3a9d09c6f7_LAMC-Catalog-2025-2026.pdf": {
+      "sha256": "c28caab76a0a2826b313c94e15b8dfc088e23302964caee8ff004bbaad1f7144",
+      "size_bytes": 7975684
+    },
+    "/Users/laccd/code/lamc_district_forms/data/visual_match/downloads/lamc/ad142f824d25_lamc-catalog-2023-2024.pdf": {
+      "sha256": "277bd584009593eeef7411aec67f28b10cdf7e0499cf6c4cbb957a33797278ac",
+      "size_bytes": 8202018
+    }
+  },
+  "holdout_patterns": [
+    "ad142f824d25",
+    "0312e204645b",
+    "1d3a9d09c6f7",
+    "2025 26 catalog",
+    "2024 25 catalog",
+    "2023 24 catalog"
+  ],
+  "length_filter": {
+    "max_tokens": 8128
+  },
+  "schema_version": 1,
+  "seed": 20260714,
+  "source_hashes": {
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/data_v3/train.jsonl": "98f91768ee2f8d86df45768ec3071cadce39e5e0f42a50c7b0c7e44feafd729a",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/data_v3/val.jsonl": "bfbcf07954949727239da382dc4ca992abd644958d8f9903b5bb01c079ba97fa",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/contrast/train.jsonl": "c6e627f6c144dca8e6f599d513f38a2930bebae08b94a7a47b4c6c0f01146c69",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/contrast/val.jsonl": "19b787acbd61e93229724a1fea0a336b6f631b571d1591b8a5fe84c3e0ca4291",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/delivered_conversations/train.jsonl": "80287c2781e262d858233fe170ef7a934a46c7b15927bdd9c63b2cb09280accf",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/delivered_conversations/val.jsonl": "0f11c1bba32f335f5f93853b4bcac395d7692e760039412b3bd7b75e4660db3b",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/heading_lamc/records.jsonl": "f9f5e3544662348c0159333e009d52d9c6e0c79d252dee5127ac6dc2bed2a16e",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/heading_hierarchy/train.jsonl": "ac99949e3c42e0d786fdd04e2311de3301dfaea17d51e88feed5374721a49b2c",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/heading_hierarchy/val.jsonl": "1c05459a678264339463b6cf7da2a313b29ba5665eab5d960ddaa5e44942c17b",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/reading_order/train.jsonl": "e898ee80711437b29ead5949c9548693d23e3af981f82f496af87198e8af0e51",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/reading_order/val.jsonl": "d3e0cc5402c81b65656de60063156dce6f528d142d237989844dcc2b50ea5e66",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/table_structure/train.jsonl": "ce66ceb22f8c20a7d1827a628e795b3b6ea63272e9bca5b06749852f607d2c39",
+    "/Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev/tools/finetune/generated/nemo_source/source_builder_outputs/table_structure/val.jsonl": "afba8ecffcbd75780629f8ce8b7230b1d826c4c0f6b9bd36464599bcd30ccba4"
+  },
+  "split_percentages": {
+    "test": 15,
+    "train": 70,
+    "validation": 15
+  }
+}

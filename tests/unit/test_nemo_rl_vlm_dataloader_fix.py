@@ -359,3 +359,64 @@ def test_length_filter_partitions_recounts_and_refreshes_manifest(tmp_path) -> N
     expected_hash = hashlib.sha256(payload.encode()).hexdigest()
     assert manifest["counts"]["train"]["contrast"] == counts
     assert manifest["dataset_hashes"]["sft/contrast/train.jsonl"] == expected_hash
+
+
+def test_length_filter_apply_refreshes_prefiltered_manifest(tmp_path, monkeypatch) -> None:
+    """An idempotent apply must repair stale counts and hashes without new drops."""
+    from tools.finetune import filter_overlong_sft_rows as length_filter
+
+    root = tmp_path / "dataset"
+    jsonl = root / "sft" / "contrast" / "train.jsonl"
+    jsonl.parent.mkdir(parents=True)
+    row = {
+        "verifier_target": {"issues": []},
+        "meta": {"task": "contrast", "source_type": "real"},
+    }
+    payload = json.dumps(row, sort_keys=True) + "\n"
+    jsonl.write_text(payload, encoding="utf-8")
+    aggregate = root / "sft" / "train.jsonl"
+    aggregate.write_text(payload, encoding="utf-8")
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "counts": {"train": {"contrast": {"total": 2}}},
+                "dataset_hashes": {
+                    "sft/contrast/train.jsonl": "stale",
+                    "sft/train.jsonl": "stale",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        length_filter,
+        "filter_split",
+        lambda *_args, **_kwargs: {
+            "file": str(jsonl),
+            "rows": 1,
+            "dropped": [],
+            "kept": 1,
+            "max_kept_tokens": 100,
+        },
+    )
+    monkeypatch.setattr(
+        length_filter.sys,
+        "argv",
+        ["filter_overlong_sft_rows.py", "--dataset-root", str(root), "--apply"],
+    )
+
+    assert length_filter.main() == 0
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counts"]["train"]["contrast"] == {
+        "total": 1,
+        "pass": 1,
+        "fail": 0,
+        "source_types": {"real": 1},
+    }
+    assert manifest["dataset_hashes"]["sft/contrast/train.jsonl"] == hashlib.sha256(
+        payload.encode()
+    ).hexdigest()
+    assert manifest["dataset_hashes"]["sft/train.jsonl"] == hashlib.sha256(
+        payload.encode()
+    ).hexdigest()

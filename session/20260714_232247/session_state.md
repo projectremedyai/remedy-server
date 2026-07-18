@@ -4,7 +4,7 @@
 - Repo: /Users/laccd/code/lamc_district_forms/remedy-server-nemo-rl-brev
 - Branch: codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft
 - Started: 2026-07-14 23:22:47 PDT
-- Updated: 2026-07-17 23:08:07 PDT
+- Updated: 2026-07-18 01:25:00 PDT
 
 ## Goal
 Finish the linked LAMC remediation and adapter-training workstreams: preserve the
@@ -13,13 +13,12 @@ improve it. Keep Qwen2.5-VL-3B as the measured training path, the existing produ
 routes as rollback, and enforce the user-approved $60 Brev ceiling.
 
 ## Current Subtask
-Take over the v3 data-fix continuation for `alt_text_quality` and
-`heading_hierarchy`. The missing immutable catalog metadata was restored and the v3
-dataset now passes the authoritative local preflight. No Brev instance exists. Provider
-billing shows the campaign at $50.82. The v3 hypothesis and persistent $60 watchdog are
-committed on the dedicated branch, and the payload is SHA-verified. Next: launch one
-guarded A100, train one meaningful epoch of alt text then heading, run the two adapter
-promotion gates, retrieve/SHA-verify all artifacts, and stop.
+The approved v3 `alt_text_quality` and `heading_hierarchy` experiment is complete.
+Both adapters trained and exported correctly but failed their frozen promotion gates,
+so neither is promoted. Artifacts and reports are local and SHA-verified; the provider
+controller records no active compute and $58.4188/$60 conservative campaign spend.
+Finalization is limited to durable records, exact dataset/manifest reconciliation, test
+verification, and the now-confirmed Brev deletion.
 
 ## Loaded Skills
 - `nemo-rl-auto-research` - baseline-first experiments, one branch per hypothesis, durable TSV ledger, and explicit stop conditions.
@@ -28,25 +27,28 @@ promotion gates, retrieve/SHA-verify all artifacts, and stop.
 - `nemo-rl-brev-etiquette` - keep source small and route checkpoints, caches, logs, and Ray state to `/ephemeral` on Brev.
 
 ## Current Status
-- Live instance `remedy-qwen25-v3-sft-20260717` (`qbi6v2ajr`) is running under
-  the approved 2.85-hour window; deadline is 2026-07-18 08:35:49 UTC. The original
-  detached watchdog inherited a dead PTY stdin and exited with `Bad file descriptor`.
-  TDD fix: `_arm_watchdog` now passes `stdin=subprocess.DEVNULL`; full local unit suite
-  is 379 passed / 1 skipped. Corrected detached watchdog PID 67914 has PPID 1 and is
-  enforcing the persisted $60 state.
-- First alt attempt passed dataloader preflight and loaded genuine language-only LoRA,
-  but stopped before learning at step 1 with the known `[8,7]` batch invariant. Exact
-  processor measurement proved the v3 rebuild had skipped the required build-time
-  length filter: 4 alt train, 49 heading train, and 4 heading validation rows exceeded
-  8,128 tokens (worst heading row 41,321). Remote SFT corpus was filtered and manifest
-  recounted; frozen test data is unchanged. Usable counts are alt 234/54 train/val and
-  heading 1,153/184. Second alt attempt passed preflight and is actively training.
-- Time-budgeted run design: `sft.max_num_epochs=1`, `sft.val_at_start=false`,
-  `sft.val_period=1000000`, `sft.val_at_end=true`, and a 1,000,000-step periodic save
-  (the end-of-run checkpoint remains required). This preserves a complete epoch and end
-  validation for each adapter while fitting the 63 alt-text plus 145 heading adapter
-  test generations inside the 2.85-hour watchdog. Promotion scoring is adapter-only;
-  the already-frozen v2 base reports remain context, not a required gate input.
+- **No v3 promotion.** Alt frozen gate: status `0.7460`, valid JSON `0.8571`, 7
+  real-pass false positives, exact `0.5313`. Heading: status `0.8207`, valid JSON
+  `0.9448`, 8 real-pass false positives, exact `0.3333`. Both fail every required gate
+  and regress their incumbents; table structure remains the only promoted adapter.
+- Alt completed 29/29 steps with end-validation loss `0.1680`; heading completed
+  144/144 with end-validation loss `0.0193`. Each adapter is a genuine 119,809,056-byte
+  PEFT export with 504 language-model tensors and zero visual tensors, and each local
+  SHA manifest passes.
+- All 208 frozen predictions, both scorer reports, generation logs, training logs, and
+  configs are local under `remote_artifacts/qwen25_v3_*` and SHA-verified. Nine alt
+  responses hit the 384-token limit mid-JSON; both adapters overcalled real pass pages.
+- The A100 window ended at `2026-07-18T08:16:48Z`; controller state has no active
+  instance and records `$7.5988` for the window, `$58.4188` cumulative, under the
+  approved `$60` ceiling. Delete was requested twice and has converged—the workspace no
+  longer appears in `brev ls`.
+- Exact Qwen filtering now covers idempotent task-specific and aggregate SFT files.
+  Final train/validation counts are alt `234/54`, heading `1153/184`, reading `278/32`,
+  table `224/28`; frozen test files are byte-identical. The refreshed authoritative
+  preflight is green with zero integrity failures or hash mismatches.
+- The original detached watchdog inherited a dead PTY stdin and exited with
+  `Bad file descriptor`; `_arm_watchdog` now uses `stdin=subprocess.DEVNULL` and has a
+  regression test. The corrected watcher enforced the approved deadline through stop.
 - Payload archive `/tmp/remedy-v3-payload-145e1fa.tar.gz` is 499 MB and has SHA-256
   `d1757d1dbc7c34dd2c5e332b8f2f67f426fa29f417c7f41663f4cdeac4499e27`.
 - Dedicated experiment branch created:

@@ -1,18 +1,44 @@
 # HANDOFF — alt_text + heading data-fix retrain (v3) — 2026-07-17
 
-**STATUS: v3 data is built, fully preflighted, RETRAIN-READY, and APPROVED. Retrain NOT
-launched yet.** Dedicated branch and commits exist; the controller/watchdog now persists
-the $60 hard limit; exact dry-run projects $59.37 from a provider-reconciled $50.82
-start. The SHA-verified v3 payload is packaged. Recheck `brev ls`, then execute the
-approved guarded launch.
+**STATUS: v3 experiment COMPLETE; BOTH ADAPTERS REJECTED; NO PROMOTION.** The two
+one-epoch adapters trained and exported correctly, but both failed the frozen promotion
+gates and regress their incumbents. The A100 was provider-stopped at
+`2026-07-18T08:16:48Z`; deletion converged and the instance no longer appears in
+`brev ls`. Conservative campaign spend is **$58.4188 of the approved $60 ceiling**.
 
 Repo: `remedy-server-nemo-rl-brev`, branch
 `codex/autoresearch/remedy-vlm-20260714/datafix-v3-sft`. Continuation of the
 eval-gate work (commit 7b84f08). User chose **data-first cheap-SFT over GRPO**.
 
+## Final outcome (authoritative)
+
+- **Alt adapter:** 29/29 steps, end-validation loss `0.1680`, genuine language-only
+  PEFT adapter (`119,809,056` bytes; 504 language tensors, 0 visual tensors; SHA-256
+  `60d99cc6e222faca3372cbcbe32e1bace65d50120e3277568da3a96dd1ee7d36`). Frozen
+  gate: status `0.7460`, valid JSON `0.8571`, **7** real-pass false positives,
+  structured exact `0.5313`. **REJECT.** Nine outputs ran into the 384-token ceiling
+  mid-JSON, and the adapter overcalled delivered pass pages as failures.
+- **Heading adapter:** 144/144 steps, end-validation loss `0.0193`, genuine
+  language-only PEFT adapter (`119,809,056` bytes; 504 language tensors, 0 visual
+  tensors; SHA-256
+  `ed0be594e8459dbff787702a8ff54194769d7da734312b9f845bf8671129bbaa`). Frozen gate:
+  status `0.8207`, valid JSON `0.9448`, **8** real-pass false positives, exact
+  correction `0.3333`. **REJECT.** This is below both the gate and the incumbent.
+- **Artifacts:** both adapters, training logs/configs, all 208 predictions, scorer
+  reports, and SHA manifests are local under `remote_artifacts/qwen25_v3_*`.
+- **Data integrity:** exact Qwen processor filtering is now applied to task-specific
+  and aggregate SFT files. Final task counts are alt train/val `234/54`, heading
+  `1153/184`, reading `278/32`, table `224/28`; frozen tests are unchanged. The
+  authoritative `datafix_v3_preflight.json` is green with zero leakage, missing media,
+  schema failures, holdout leaks, balance errors, or hash mismatches.
+- **Decision:** keep the prior alt and heading adapters/routes. Table structure remains
+  the only promoted adapter. Do not use either v3 adapter in PDF remediation.
+- **Final verification:** 381 tests passed, 1 skipped; JSON/TSV, Python compile, shell
+  syntax, dataset preflight, and local adapter/evaluation SHA checks all pass.
+
 ---
 
-## ▶ RESUME PRECONDITIONS (check ALL before spending a cent)
+## Superseded prelaunch preconditions (historical; do not execute)
 1. **`brev ls` shows 0 running instances.** On 2026-07-17 an UNTRACKED idle A100
    (`brevp1sftr2`/`gjn2yleez`, default jupyter box, GPU 0%, ~$2.50+ burned) was found
    and stopped — an orphan from the concurrent session. `brev ls` is the truth, NOT
@@ -32,7 +58,7 @@ eval-gate work (commit 7b84f08). User chose **data-first cheap-SFT over GRPO**.
    1,456 media files, exact SFT/Gym ID alignment for both tasks, zero subjective alt
    labels, and full unit suite 368 passed / 1 skipped.
 
-## ▶ RESUME STEPS (the retrain — one warm A100 window, ~$2–4 est.)
+## Superseded prelaunch steps (completed; do not execute)
 1. Package the v3 payload:
    `REMEDY_DATASET_ROOT=tools/finetune/generated/nemo_campaign_dataset_v3 \`
    `  bash tools/finetune/prepare_brev_payload.sh` (v3 has sft/ + media/ + manifest.json —
@@ -88,14 +114,15 @@ heading 0.866/1FP/0.995json/0.681exact.
 - Restore the 4 `.jsonl.orig` backups (heading train/val + delivered_conv train/val).
 - v3 gym is a SEPARATE dir — delete `nemo_campaign_dataset_v3/` to fully revert.
 
-## Realistic outlook
-- **alt_text: good shot.** The FP mechanism is removed at the source. Watch the lone
-  invalid-JSON row (generation robustness, not a data defect) for the valid_json==1.0 gate.
-- **heading: LOW confidence.** The 0.85 exact-correction bar is RE-LEVELING, which the
-  32B heading-v2 provably could NOT do ([[heading-v2-cannot-relevel]]); 84 real fails is
-  thin. If it misses, KEEP the incumbent 32B heading-v2 (t=0) route for the 3 catalogs —
-  user pre-agreed fold+rebalance is low-regret.
-- Efficacy of BOTH is a HYPOTHESIS only the retrain validates.
+## Hypothesis verdict
+
+- **Alt objective-label hypothesis: rejected.** Correcting the source labels did not
+  cure overcalling and introduced severe output-length/JSON regressions.
+- **Heading rebalance hypothesis: rejected.** Low validation loss did not transfer to
+  the real/frozen correction gate; exact correction fell to `0.3333`.
+- The experiment confirms that SFT validation loss is not a safe promotion signal for
+  these tasks. Future work must change output shaping/input evidence and pass the same
+  frozen gates before any deployment decision.
 
 ## Pointers
 - Memory: `~/.claude/.../memory/adapter-eval-gates-datafix.md` (gate thresholds, GRPO

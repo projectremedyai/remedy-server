@@ -141,8 +141,16 @@
       "outcome": "provider_reconciliation",
       "started_at": "2026-07-18T04:43:31+00:00",
       "stopped_at": "2026-07-18T04:43:31+00:00"
+    },
+    {
+      "cost_usd": 7.5988,
+      "hourly_rate_usd": 3.0,
+      "instance": "remedy-qwen25-v3-sft-20260717",
+      "outcome": "stopped",
+      "started_at": "2026-07-18T05:44:49.869586+00:00",
+      "stopped_at": "2026-07-18T08:16:48.392969+00:00"
     }
   ],
-  "recorded_spend_usd": 50.82,
+  "recorded_spend_usd": 58.4188,
   "reserve_usd": 0.6
 }

@@ -171,7 +171,7 @@ def main() -> int:
                 continue
             result = filter_split(jsonl, args.max_tokens, args.workers, args.apply)
             report.append(result)
-            if args.apply and result["dropped"]:
+            if args.apply:
                 rows = [
                     json.loads(l)
                     for l in jsonl.read_text(encoding="utf-8").splitlines()
@@ -186,9 +186,26 @@ def main() -> int:
             )
             for d in result["dropped"]:
                 print(f"    dropped row {d['index']}: {d['tokens']} tokens")
+    for split in ("train", "validation"):
+        jsonl = args.dataset_root / "sft" / f"{split}.jsonl"
+        if not jsonl.exists():
+            continue
+        result = filter_split(jsonl, args.max_tokens, args.workers, args.apply)
+        report.append(result)
+        if args.apply:
+            relative = jsonl.relative_to(args.dataset_root).as_posix()
+            manifest.setdefault("dataset_hashes", {})[relative] = _sha256(jsonl)
+        print(
+            f"aggregate/{split}: rows={result['rows']} dropped={len(result['dropped'])} "
+            f"max_kept={result['max_kept_tokens']}"
+        )
+        for d in result["dropped"]:
+            print(f"    dropped row {d['index']}: {d['tokens']} tokens")
     if args.apply:
         manifest["length_filter"] = {"max_tokens": args.max_tokens}
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         print("manifest updated")
     return 0
 

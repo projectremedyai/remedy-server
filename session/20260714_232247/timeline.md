@@ -246,3 +246,40 @@
   balanced at 117 pass / 117 fail; heading is 576 fail / 577 pass.
 - Alt attempt 2 passed dataloader preflight on the filtered corpus, loaded genuine
   language-scoped LoRA modules, and began the one-epoch 29-step run.
+
+## 2026-07-18 01:25:00 PDT
+- Alt v3 completed 29/29 one-epoch steps and end validation (`0.1680`). Its
+  119,809,056-byte adapter has 504/504 language tensors, zero visual tensors, and
+  SHA-256 `60d99cc6e222faca3372cbcbe32e1bace65d50120e3277568da3a96dd1ee7d36`.
+- Heading v3 completed 144/144 one-epoch steps and end validation (`0.0193`). Its
+  119,809,056-byte adapter has 504/504 language tensors, zero visual tensors, and
+  SHA-256 `ed0be594e8459dbff787702a8ff54194769d7da734312b9f845bf8671129bbaa`.
+- Installed PEFT 0.19.1 into `/ephemeral/nemo-rl/eval_python` and generated all 208
+  frozen adapter predictions (63 alt + 145 heading) with training-faithful
+  `max_pixels=12845056` and deterministic decoding.
+- **Both candidates rejected.** Alt: status `0.7460`, valid JSON `0.8571`, 7 real-pass
+  false positives, exact `0.5313`. Heading: status `0.8207`, valid JSON `0.9448`, 8
+  real-pass false positives, exact `0.3333`. Neither passes any required promotion
+  check; both regress the incumbent adapters. Table structure remains the only promoted
+  adapter.
+- Alt diagnosis: 9/63 responses exhausted the 384-token generation allowance mid-JSON,
+  and the model overcalled delivered gold-pass pages as failures. This is an
+  output-shape/calibration regression, not a prediction-ID or scorer mismatch.
+- Retrieved both adapters, logs/configs, predictions, and reports before stop. Adapter
+  and evaluation SHA manifests pass locally under `remote_artifacts/qwen25_v3_*`.
+- Brev CLI refresh expired during retrieval; direct SSH through the already-provisioned
+  Brev host alias preserved the live evaluation. Reauthenticated through NVIDIA before
+  provider stop. The controller stopped the A100 at `2026-07-18T08:16:48Z`, recording
+  `$7.5988` for the window and `$58.4188/$60` cumulative. Brev first reported `STOPPED`;
+  delete was requested twice and later converged, so the workspace no longer appears in
+  `brev ls`.
+- Reproduced the paid exact-length filter locally with Transformers 4.57.1 and the
+  cached Qwen processor. Extended the filter so idempotent applies always refresh
+  task counts/hashes and so combined SFT train/validation files are filtered too.
+  Combined files dropped 61 train and 6 validation rows; task-specific final counts are
+  alt `234/54`, heading `1153/184`, reading `278/32`, and table `224/28`. Frozen test
+  files are unchanged.
+- Refreshed `datafix_v3_preflight.json`: passed with zero document leakage, missing
+  media, schema failures, holdout leaks, balance errors, or hash mismatches. Focused
+  exact-filter tests pass. Final verification: 381 tests passed, 1 skipped; TSV shape,
+  JSON parsing, Python compilation, shell syntax, and all local SHA manifests passed.
